@@ -1,3 +1,4 @@
 *.csv
 !schema/*.csv
 .DS_Store
+state/

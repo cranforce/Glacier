@@ -15,11 +15,18 @@
 #   -d  Delta: export only records with SystemModstamp at or after the table's
 #       MAX(SYSTEMMODSTAMP) and MERGE them on ID. Falls back to a full load
 #       when the table is missing, empty, or has no SYSTEMMODSTAMP column.
+#   -D  Deleted records: off (default), flag (keep the row with ISDELETED =
+#       TRUE), or remove (delete the row). Deletes are read from the Salesforce
+#       recycle bin, which keeps them for about 15 days; use -R for older ones.
+#   -R  Reconcile: export the Ids that currently exist in Salesforce and flag
+#       or remove (per -D) every table row whose Id is gone. Catches deletes
+#       that have left the recycle bin. Doesn't load any other changes.
 #   -r  Replace the table if it already exists (default: fail if it exists)
 #   -x  Create every column as VARCHAR instead of inferring types
 #   -k  Keep the local CSV after loading
 #
-# Id and SystemModstamp are added to the query if it doesn't select them.
+# Id and SystemModstamp (plus IsDeleted with -D) are added to the query if it
+# doesn't select them.
 #
 # Overridable via environment:
 #   SNOW_CONNECTION (default ODBM), SNOW_DB (default CRM_DB),
@@ -35,15 +42,18 @@ SNOW_WAREHOUSE="${SNOW_WAREHOUSE:-DS_DATA_ENGINNNERING_WH}"
 
 usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; exit 1; }
 
-org="" table="" query="" query_file="" types_file="" delta=0 replace=0 all_text=0 keep=0
-while getopts "o:t:q:f:s:drxkh" opt; do
+org="" table="" query="" query_file="" types_file="" delete_mode=off
+delta=0 reconcile=0 replace=0 all_text=0 keep=0
+while getopts "o:t:q:f:s:D:dRrxkh" opt; do
   case "$opt" in
     o) org="$OPTARG" ;;
     t) table="$OPTARG" ;;
     q) query="$OPTARG" ;;
     f) query_file="$OPTARG" ;;
     s) types_file="$OPTARG" ;;
+    D) delete_mode="$OPTARG" ;;
     d) delta=1 ;;
+    R) reconcile=1 ;;
     r) replace=1 ;;
     x) all_text=1 ;;
     k) keep=1 ;;
@@ -57,6 +67,15 @@ done
 [[ "$table" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "Invalid table name: $table" >&2; exit 1; }
 [[ -z "$query_file" || -r "$query_file" ]] || { echo "Cannot read query file: $query_file" >&2; exit 1; }
 [[ -z "$types_file" || -r "$types_file" ]] || { echo "Cannot read type map: $types_file" >&2; exit 1; }
+[[ "$delete_mode" =~ ^(off|flag|remove)$ ]] || { echo "-D must be off, flag, or remove." >&2; exit 1; }
+if (( reconcile )); then
+  (( delta || replace )) && { echo "-R can't be combined with -d or -r." >&2; exit 1; }
+  [[ "$delete_mode" != off ]] || { echo "-R needs -D flag or -D remove." >&2; exit 1; }
+fi
+if [[ "$delete_mode" != off && -n "$types_file" ]] && ! grep -q "^ISDELETED$(printf '\t')" "$types_file"; then
+  echo "This object has no IsDeleted field, so deletes can't be tracked. Use -D off." >&2
+  exit 1
+fi
 if [[ -n "$query_file" ]]; then query="$(cat "$query_file")"; fi
 
 table="$(echo "$table" | tr '[:lower:]' '[:upper:]')"
@@ -78,16 +97,24 @@ USE ROLE $SNOW_ROLE;
 USE WAREHOUSE $SNOW_WAREHOUSE;
 USE SCHEMA $SNOW_DB.$SNOW_SCHEMA;"
 
-# Flatten the query to one line, make sure it selects Id and SystemModstamp,
-# and, given a timestamp, restrict it to records modified at or after it.
+# Flatten the query to one line and make sure it selects Id, SystemModstamp,
+# and any extra fields. Given a timestamp, restrict it to records modified at
+# or after it. In "ids" mode, select only Id (for reconciling).
 build_query() {
   perl -e '
-    my ($q, $since) = @ARGV;
+    my ($q, $since, $extra, $ids_only) = @ARGV;
     $q =~ s/\s+/ /g; $q =~ s/^ | $//g; $q =~ s/;$//;
     $q =~ /^select (.*?) from \w+/i
       or die "Could not parse query; expected SELECT <fields> FROM <Object>\n";
+    if ($ids_only) {
+      $q =~ /\b(limit|offset)\b/i
+        and die "Can not reconcile a query that uses LIMIT or OFFSET\n";
+      $q =~ s/^select .*? from /SELECT Id FROM /i;
+      print $q;
+      exit;
+    }
     my %have = map { lc(s/^\s+|\s+$//gr) => 1 } split /,/, $1;
-    my @add = grep { !$have{lc $_} } qw(Id SystemModstamp);
+    my @add = grep { !$have{lc $_} } ("Id", "SystemModstamp", split / /, $extra);
     $q =~ s/^select /"SELECT " . join("", map { "$_, " } @add)/ie if @add;
     if ($since) {
       my $cond = "SystemModstamp >= $since";
@@ -98,7 +125,7 @@ build_query() {
       }
     }
     print $q;
-  ' "$1" "${2:-}"
+  ' "$1" "${2:-}" "${3:-}" "${4:-}"
 }
 
 # 1. In delta mode, find the newest SystemModstamp already loaded
@@ -144,17 +171,36 @@ EOF
   esac
 fi
 
-final_query="$(build_query "$query" "$since")"
+# Deleted records come from the recycle bin (--all-rows). A full load in
+# remove mode skips them, since they'd only be deleted again.
+extra_fields="" all_rows=0
+if [[ "$delete_mode" != off ]]; then
+  extra_fields="IsDeleted"
+  if (( delta )) || [[ "$delete_mode" == flag ]]; then all_rows=1; fi
+fi
+(( reconcile )) && all_rows=0
+
+final_query="$(build_query "$query" "$since" "$extra_fields" "$reconcile")"
 
 # 2. Export from Salesforce
-echo "==> Exporting from Salesforce org '$org'..."
-sf data export bulk --target-org "$org" --query "$final_query" --output-file "$csv" \
-  --result-format csv --wait 60 --line-ending LF
+if (( reconcile )); then
+  echo "==> Exporting current Ids from Salesforce org '$org'..."
+else
+  echo "==> Exporting from Salesforce org '$org'..."
+fi
+sf_args=(data export bulk --target-org "$org" --query "$final_query" --output-file "$csv"
+  --result-format csv --wait 60 --line-ending LF)
+(( all_rows )) && sf_args+=(--all-rows)
+sf "${sf_args[@]}"
 
 rows=0
 if [[ -s "$csv" ]]; then rows=$(( $(wc -l < "$csv") - 1 )); fi
 if (( rows < 1 )); then
   if (( delta )); then echo "==> No changes since $since; $fq_table is up to date."; exit 0; fi
+  if (( reconcile )); then
+    echo "Salesforce returned no Ids; refusing to reconcile (it would flag or remove every row)." >&2
+    exit 1
+  fi
   echo "Query returned no rows; nothing to load." >&2
   exit 1
 fi
@@ -174,8 +220,31 @@ col_type() {
 col_defs=()
 for c in "${cols[@]}"; do col_defs+=("$c $(col_type "$c")"); done
 
+is_deleted="COALESCE(s.ISDELETED::BOOLEAN, FALSE)"
+
 # 5. Build the Snowflake script
-if (( delta )); then
+if (( reconcile )); then
+  ids_table="${table}__IDS"
+  if [[ "$delete_mode" == remove ]]; then
+    apply_sql="DELETE FROM $fq_table WHERE ID NOT IN (SELECT ID FROM $ids_table);"
+  else
+    apply_sql="ALTER TABLE $fq_table ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN;
+UPDATE $fq_table SET ISDELETED = TRUE
+  WHERE ID NOT IN (SELECT ID FROM $ids_table)
+    AND NOT COALESCE(ISDELETED::BOOLEAN, FALSE);"
+  fi
+
+  load_sql="CREATE OR REPLACE TEMPORARY TABLE $ids_table (ID VARCHAR);
+
+COPY INTO $ids_table
+  FROM $stage_path/
+  FILE_FORMAT = (FORMAT_NAME = 'SF_TO_SNOWFLAKE_CSV')
+  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
+  ON_ERROR = 'ABORT_STATEMENT'
+  PURGE = TRUE;
+
+$apply_sql"
+elif (( delta )); then
   delta_table="${table}__DELTA"
   add_cols="" set_list="" ins_cols="" ins_vals=""
   for i in "${!cols[@]}"; do
@@ -185,6 +254,15 @@ if (( delta )); then
     ins_vals+="${ins_vals:+, }s.$c"
     [[ "$c" == "ID" ]] || set_list+="${set_list:+, }$c = s.$c"
   done
+
+  if [[ "$delete_mode" == remove ]]; then
+    merge_actions="WHEN MATCHED AND $is_deleted THEN DELETE
+WHEN MATCHED THEN UPDATE SET $set_list
+WHEN NOT MATCHED AND NOT $is_deleted THEN INSERT ($ins_cols) VALUES ($ins_vals);"
+  else
+    merge_actions="WHEN MATCHED THEN UPDATE SET $set_list
+WHEN NOT MATCHED THEN INSERT ($ins_cols) VALUES ($ins_vals);"
+  fi
 
   load_sql="-- Add any fields that are new to the query
 $add_cols
@@ -203,8 +281,7 @@ USING (
   QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1
 ) s
 ON t.ID = s.ID
-WHEN MATCHED THEN UPDATE SET $set_list
-WHEN NOT MATCHED THEN INSERT ($ins_cols) VALUES ($ins_vals);"
+$merge_actions"
 else
   create_kw="CREATE TABLE"
   (( replace )) && create_kw="CREATE OR REPLACE TABLE"
@@ -232,6 +309,12 @@ COPY INTO $fq_table
   PURGE = TRUE;"
 fi
 
+summary_sql="SELECT COUNT(*) AS TOTAL_ROWS, MAX(SYSTEMMODSTAMP) AS LATEST_SYSTEMMODSTAMP FROM $fq_table;"
+if [[ "$delete_mode" == flag ]]; then
+  summary_sql="SELECT COUNT(*) AS TOTAL_ROWS, COUNT_IF(ISDELETED::BOOLEAN) AS DELETED_ROWS,
+  MAX(SYSTEMMODSTAMP) AS LATEST_SYSTEMMODSTAMP FROM $fq_table;"
+fi
+
 cat > "$sql" <<EOF
 $session_sql
 
@@ -247,11 +330,13 @@ PUT 'file://$csv' $stage_path/ AUTO_COMPRESS = TRUE OVERWRITE = TRUE;
 
 $load_sql
 
-SELECT COUNT(*) AS TOTAL_ROWS, MAX(SYSTEMMODSTAMP) AS LATEST_SYSTEMMODSTAMP FROM $fq_table;
+$summary_sql
 EOF
 
 # 6. Load into Snowflake (one session, so one SSO browser prompt)
-if (( delta )); then
+if (( reconcile )); then
+  echo "==> Reconciling deletes ($delete_mode) in $fq_table via connection '$SNOW_CONNECTION'..."
+elif (( delta )); then
   echo "==> Merging into $fq_table via connection '$SNOW_CONNECTION'..."
 else
   echo "==> Loading into $fq_table via connection '$SNOW_CONNECTION'..."
