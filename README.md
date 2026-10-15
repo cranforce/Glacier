@@ -17,8 +17,8 @@ Snowflake with the `snow` CLI.
 | --- | --- |
 | `project.env` | Salesforce org and Snowflake connection, database, schema, role, warehouse |
 | `objects.conf` | Objects to sync, their Snowflake table names, and optional per-object delete mode |
-| `queries/<Object>.soql` | Fields to export. Generated with every field if missing; edit freely |
-| `schema/<Object>.*` | `sf sobject describe` output: raw JSON, readable field list, Snowflake type map |
+| `queries/<Object>.soql` | Fields to export. Generated with every field if missing; edit freely. Not committed |
+| `schema/<Object>.*` | `sf sobject describe` output: raw JSON, readable field list, Snowflake type map. Not committed |
 | `bin/sf_schema.sh` | Captures schema for one or more objects |
 | `bin/sf_to_snowflake.sh` | Exports one query and loads it into one table (full or delta) |
 | `state/` | Last successful sync time per object (local only, not committed) |

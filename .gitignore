@@ -1,4 +1,5 @@
 *.csv
-!schema/*.csv
 .DS_Store
+schema/
+queries/
 state/
