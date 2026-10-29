@@ -154,27 +154,22 @@ EXECUTE IMMEDIATE \$\$
 DECLARE
   has_table INTEGER;
   has_col INTEGER;
-  cols VARCHAR;
   wm VARCHAR;
 BEGIN
-  SELECT COUNT(*), COUNT_IF(COLUMN_NAME = 'SYSTEMMODSTAMP'), LISTAGG(COLUMN_NAME, ',')
-    INTO :has_table, :has_col, :cols
+  SELECT COUNT(*), COUNT_IF(COLUMN_NAME = 'SYSTEMMODSTAMP') INTO :has_table, :has_col
     FROM $SNOW_DB.INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_SCHEMA = '$SNOW_SCHEMA' AND TABLE_NAME = '$table';
   IF (has_table = 0) THEN RETURN 'NO_TABLE'; END IF;
   IF (has_col = 0) THEN RETURN 'NO_COLUMN'; END IF;
   SELECT TO_VARCHAR(CONVERT_TIMEZONE('UTC', MAX(SYSTEMMODSTAMP)::TIMESTAMP_TZ), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
     INTO :wm FROM $fq_table;
-  -- The existing columns ride along so new fields can be added in one ALTER
-  RETURN COALESCE(wm, 'EMPTY') || '|' || cols;
+  RETURN COALESCE(wm, 'EMPTY');
 END;
 \$\$;
 EOF
 )"
   wm_out="$(snow sql -c "$SNOW_CONNECTION" --format json -q "$wm_sql")"
-  wm_result="$(jq -r '[.. | objects | select(has("anonymous block")) | .["anonymous block"]] | last // empty' <<< "$wm_out" 2>/dev/null || true)"
-  wm="${wm_result%%|*}"
-  existing_cols=",${wm_result#*|},"
+  wm="$(jq -r '[.. | objects | select(has("anonymous block")) | .["anonymous block"]] | last // empty' <<< "$wm_out" 2>/dev/null || true)"
 
   case "$wm" in
     NO_TABLE)  echo "    Table doesn't exist yet; doing a full load."; delta=0 ;;
@@ -267,11 +262,11 @@ COPY INTO $ids_table
 $apply_sql"
 elif (( delta )); then
   delta_table="${table}__DELTA"
-  new_cols="" set_list="" ins_cols="" ins_vals=""
+  add_cols="" set_list="" ins_cols="" ins_vals=""
   for i in "${!cols[@]}"; do
     c="${cols[$i]}"
-    [[ "$existing_cols" == *",$c,"* ]] || new_cols+="${new_cols:+,
-  }${col_defs[$i]}"
+    add_cols+="${add_cols:+,
+  }IF NOT EXISTS ${col_defs[$i]}"
     ins_cols+="${ins_cols:+, }$c"
     ins_vals+="${ins_vals:+, }s.$c"
     [[ "$c" == "ID" ]] || set_list+="${set_list:+, }$c = s.$c"
@@ -286,16 +281,11 @@ WHEN NOT MATCHED AND NOT $is_deleted THEN INSERT ($ins_cols) VALUES ($ins_vals);
 WHEN NOT MATCHED THEN INSERT ($ins_cols) VALUES ($ins_vals);"
   fi
 
-  add_cols=""
-  if [[ -n "$new_cols" ]]; then
-    echo "    Adding new columns: $(echo "$new_cols" | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $1 }' | tr -d ',')"
-    add_cols="-- Fields that are new to the query
-ALTER TABLE $fq_table ADD COLUMN
-  $new_cols;
-"
-  fi
+  # Add any fields that are new to the query. IF NOT EXISTS has to be repeated
+  # for each column: Snowflake applies a single one only to the first column.
+  load_sql="ALTER TABLE $fq_table ADD COLUMN
+  $add_cols;
 
-  load_sql="$add_cols
 CREATE OR REPLACE TEMPORARY TABLE $delta_table LIKE $fq_table;
 
 COPY INTO $delta_table
