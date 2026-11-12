@@ -3,3 +3,7 @@
 schema/
 queries/
 state/
+*.key
+*.pem
+*.crt
+__pycache__/
