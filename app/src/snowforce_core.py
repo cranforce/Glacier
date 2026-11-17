@@ -212,9 +212,12 @@ def full_load_statements(fq_table, columns, types, stage_path, file_format, has_
 
 
 def delta_statements(fq_table, delta_table, columns, types, stage_path, file_format, delete_mode):
+    # The delta table has exactly the exported columns: COPY rejects files whose
+    # column count differs from the table's, and the target can have extra columns.
+    defs = ",\n  ".join(column_defs(columns, types))
     return [
         add_columns_sql(fq_table, columns, types),
-        f"CREATE OR REPLACE TEMPORARY TABLE {delta_table} LIKE {fq_table}",
+        f"CREATE OR REPLACE TEMPORARY TABLE {delta_table} (\n  {defs}\n)",
         copy_sql(delta_table, stage_path, file_format),
         merge_sql(fq_table, delta_table, columns, delete_mode),
     ]

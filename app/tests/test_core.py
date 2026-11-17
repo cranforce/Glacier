@@ -101,6 +101,12 @@ class LoadSqlTest(unittest.TestCase):
         self.assertIn("WHEN MATCHED AND COALESCE(s.ISDELETED::BOOLEAN, FALSE) THEN DELETE", remove)
         self.assertIn("WHEN NOT MATCHED AND NOT COALESCE", remove)
 
+    def test_delta_table_has_only_exported_columns(self):
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag")
+        self.assertEqual(stmts[1], "CREATE OR REPLACE TEMPORARY TABLE D.S.T__DELTA (\n  ID VARCHAR,\n  "
+                                   "SYSTEMMODSTAMP TIMESTAMP_NTZ,\n  ISDELETED BOOLEAN,\n  NAME VARCHAR\n)")
+        self.assertNotIn("LIKE", stmts[1])
+
     def test_full_load_without_rows_only_creates(self):
         self.assertEqual(len(core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", False)), 1)
         both = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True)
