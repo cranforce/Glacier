@@ -6,8 +6,8 @@ locally. The stored procedures in snowforce_procs.py run the SQL built here.
 import re
 from datetime import timedelta
 
-# Snowflake reserved words can't be unquoted table names. The project
-# convention is to prefix them with SFORCE_.
+# Snowflake reserved words can only be table names when double-quoted, so
+# table_ref() quotes them (ORDER -> "ORDER").
 RESERVED = frozenset("""
     ACCOUNT ALL ALTER AND ANY AS BETWEEN BY CASE CAST CHECK COLUMN CONNECT
     CONNECTION CONSTRAINT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP
@@ -52,17 +52,20 @@ def identifier(name, what="name"):
 
 
 def table_identifier(name):
-    """Validate a table name, rejecting reserved words with the SFORCE_ form suggested."""
-    table = identifier(name, "table name")
-    if table in RESERVED:
-        raise ConfigError(f"{table} is a reserved word in Snowflake; use SFORCE_{table} instead.")
-    return table
+    """Validate a table name and return it uppercased, unquoted (reserved words allowed)."""
+    return identifier(name, "table name")
+
+
+def table_ref(database, schema, table):
+    """DB.SCHEMA.TABLE for SQL, double-quoting a table name that's a reserved word."""
+    table = table_identifier(table)
+    quoted = f'"{table}"' if table in RESERVED else table
+    return f"{identifier(database, 'database')}.{identifier(schema, 'schema')}.{quoted}"
 
 
 def default_table_name(sobject):
-    """The object's API name uppercased, with SFORCE_ in front of reserved words."""
-    table = identifier(sobject, "object name")
-    return f"SFORCE_{table}" if table in RESERVED else table
+    """The object's API name uppercased (Order -> ORDER)."""
+    return identifier(sobject, "object name")
 
 
 def user_identifier(name):

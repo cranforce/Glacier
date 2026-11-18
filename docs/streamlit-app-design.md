@@ -10,7 +10,8 @@ Run Snowforce entirely inside Snowflake, managed from a Streamlit app, with:
 - **Any Salesforce object** imported into a **destination database, schema, and table chosen per
   job**. The table name defaults to the object's API name uppercased (`GiftTransaction` →
   `GIFTTRANSACTION`, `Subscription__c` → `SUBSCRIPTION__C`) and can be changed. Snowflake reserved
-  words are rejected with the `SFORCE_` name suggested (`Order` → `SFORCE_ORDER`).
+  words keep their name and are double-quoted in SQL (`Order` → `"ORDER"`), so queries against
+  those tables need the quotes too.
 - **Per-job choice of Snowflake user, role, and warehouse** that the load runs as.
 - The sync behaviour Snowforce has today: SystemModstamp deltas merged on Id, typed columns from the
   Salesforce schema, delete handling (`off` / `flag` / `remove`), and the reconcile safety net.

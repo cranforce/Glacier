@@ -14,14 +14,16 @@ class NamesTest(unittest.TestCase):
         self.assertEqual(core.default_table_name("GiftTransaction"), "GIFTTRANSACTION")
         self.assertEqual(core.default_table_name("Subscription__c"), "SUBSCRIPTION__C")
 
-    def test_reserved_object_names_get_prefix(self):
-        self.assertEqual(core.default_table_name("Order"), "SFORCE_ORDER")
-        self.assertEqual(core.default_table_name("Account"), "SFORCE_ACCOUNT")
+    def test_reserved_object_names_keep_their_name(self):
+        self.assertEqual(core.default_table_name("Order"), "ORDER")
+        self.assertEqual(core.default_table_name("Account"), "ACCOUNT")
 
-    def test_reserved_table_name_rejected_with_suggestion(self):
-        with self.assertRaisesRegex(core.ConfigError, "use SFORCE_ORDER instead"):
-            core.table_identifier("order")
-        self.assertEqual(core.table_identifier("sforce_order"), "SFORCE_ORDER")
+    def test_table_ref_quotes_reserved_words(self):
+        self.assertEqual(core.table_ref("crm_db", "s", "order"), 'CRM_DB.S."ORDER"')
+        self.assertEqual(core.table_ref("crm_db", "s", "ORDER__DELTA"), "CRM_DB.S.ORDER__DELTA")
+        self.assertEqual(core.table_ref("crm_db", "s", "Gift_Transaction"), "CRM_DB.S.GIFT_TRANSACTION")
+        with self.assertRaises(core.ConfigError):
+            core.table_ref("crm_db", "s", 'ORDER"; DROP')
 
     def test_identifier_rejects_injection(self):
         for bad in ("A B", "A;DROP", "1ABC", "", None, 'A"B'):

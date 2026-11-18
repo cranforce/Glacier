@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.SNOWFORCE_JOBS (
   FIELDS               ARRAY COMMENT 'Field API names; NULL for every exportable field',
   TARGET_DATABASE      VARCHAR NOT NULL,
   TARGET_SCHEMA        VARCHAR NOT NULL,
-  TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name (SFORCE_ prefix on reserved words)',
+  TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name, uppercased; reserved words like ORDER are quoted',
   DELETE_MODE          VARCHAR DEFAULT 'flag' NOT NULL COMMENT 'off, flag, or remove',
   RECONCILE_AFTER_DAYS NUMBER DEFAULT 14 NOT NULL,
   RUN_AS_USER          VARCHAR COMMENT 'NULL to run as the system service in the app role',

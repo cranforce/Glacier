@@ -282,7 +282,8 @@ def _run(session, app, job, mode, run_id):
     db = core.identifier(job["TARGET_DATABASE"], "target database")
     schema = core.identifier(job["TARGET_SCHEMA"], "target schema")
     table = core.table_identifier(job.get("TARGET_TABLE") or core.default_table_name(sobject))
-    fq_table = f"{db}.{schema}.{table}"
+    fq_table = core.table_ref(db, schema, table)
+    staging = {suffix: core.table_ref(db, schema, table + suffix) for suffix in ("__DELTA", "__IDS")}
     delete_mode = (job.get("DELETE_MODE") or "flag").lower()
     if delete_mode not in core.DELETE_MODES:
         raise core.ConfigError(f"Unknown delete mode {delete_mode!r}")
@@ -307,7 +308,7 @@ def _run(session, app, job, mode, run_id):
         return _variant(session.call(f"{app}.SNOWFORCE_EXTRACT", conn, soql, all_rows, run_id))
 
     if mode == "reconcile":
-        return _reconcile(session, app, job, sobject, fq_table, file_format, delete_mode, export)
+        return _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode, export)
 
     # Delta from the table's watermark, or a full load when there's nothing to go on
     since, note = None, None
@@ -337,7 +338,7 @@ def _run(session, app, job, mode, run_id):
             result["message"] = f"No changes since {since}."
         else:
             out = _execute(session, core.delta_statements(
-                fq_table, f"{fq_table}__DELTA", columns, types, exported["stage_path"], file_format,
+                fq_table, staging["__DELTA"], columns, types, exported["stage_path"], file_format,
                 delete_mode))
             merged = out[-1][0]
             result.update(inserted=merged.get("number of rows inserted"),
@@ -354,14 +355,15 @@ def _run(session, app, job, mode, run_id):
     if mode == "sync" and delete_mode != "off" and core.reconcile_due(
             _last_success(session, app, job["JOB_NAME"]), datetime.now(timezone.utc),
             int(job.get("RECONCILE_AFTER_DAYS") or 14)):
-        reconciled = _reconcile(session, app, job, sobject, fq_table, file_format, delete_mode, export)
+        reconciled = _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode,
+                                export)
         result["message"] = " ".join(filter(None, [result.get("message"), reconciled["message"]]))
         if delete_mode == "remove":
             result["deleted"] = (result.get("deleted") or 0) + (reconciled.get("deleted") or 0)
     return result
 
 
-def _reconcile(session, app, job, sobject, fq_table, file_format, delete_mode, export):
+def _reconcile(session, sobject, fq_table, ids_table, file_format, delete_mode, export):
     if delete_mode == "off":
         raise core.ConfigError("Deletes are off for this job; nothing to reconcile.")
     exported = export(core.build_ids_soql(sobject), False)
@@ -369,7 +371,7 @@ def _reconcile(session, app, job, sobject, fq_table, file_format, delete_mode, e
         raise core.ConfigError("Salesforce returned no Ids; refusing to reconcile "
                                "(it would flag or remove every row).")
     out = _execute(session, core.reconcile_statements(
-        fq_table, f"{fq_table}__IDS", exported["stage_path"], file_format, delete_mode))
+        fq_table, ids_table, exported["stage_path"], file_format, delete_mode))
     changed = out[-1][0].get("number of rows deleted" if delete_mode == "remove" else "number of rows updated")
     verb = "Removed" if delete_mode == "remove" else "Flagged"
     return {"mode": "reconcile", "exported": exported["rows"], "deleted": changed,

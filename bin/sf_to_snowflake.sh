@@ -80,8 +80,8 @@ if [[ -n "$query_file" ]]; then query="$(cat "$query_file")"; fi
 
 table="$(echo "$table" | tr '[:lower:]' '[:upper:]')"
 
-# Snowflake reserved words can't be unquoted table names; the project
-# convention is to prefix them with SFORCE_.
+# Snowflake reserved words can only be table names when double-quoted
+# (ORDER -> "ORDER"), so quote them wherever SQL names the table.
 reserved=" ACCOUNT ALL ALTER AND ANY AS BETWEEN BY CASE CAST CHECK COLUMN CONNECT
   CONNECTION CONSTRAINT CREATE CROSS CURRENT CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP
   CURRENT_USER DATABASE DELETE DISTINCT DROP ELSE EXISTS FALSE FOLLOWING FOR FROM FULL
@@ -90,12 +90,12 @@ reserved=" ACCOUNT ALL ALTER AND ANY AS BETWEEN BY CASE CAST CHECK COLUMN CONNEC
   ORGANIZATION QUALIFY REGEXP REVOKE RIGHT RLIKE ROW ROWS SAMPLE SCHEMA SELECT SET SOME
   START TABLE TABLESAMPLE THEN TO TRIGGER TRUE TRY_CAST UNION UNIQUE UPDATE USING VALUES
   VIEW WHEN WHENEVER WHERE WITH "
+table_sql="$table"
 if [[ "$(echo $reserved)" =~ (^| )$table( |$) ]]; then
-  echo "$table is a reserved word in Snowflake; use SFORCE_$table instead." >&2
-  exit 1
+  table_sql="\"$table\""
 fi
 
-fq_table="$SNOW_DB.$SNOW_SCHEMA.$table"
+fq_table="$SNOW_DB.$SNOW_SCHEMA.$table_sql"
 stage_path="@~/sf_to_snowflake/$table"
 
 workdir="$(mktemp -d)"
@@ -262,11 +262,13 @@ COPY INTO $ids_table
 $apply_sql"
 elif (( delta )); then
   delta_table="${table}__DELTA"
-  add_cols="" set_list="" ins_cols="" ins_vals=""
+  add_cols="" delta_cols="" set_list="" ins_cols="" ins_vals=""
   for i in "${!cols[@]}"; do
     c="${cols[$i]}"
     add_cols+="${add_cols:+,
   }IF NOT EXISTS ${col_defs[$i]}"
+    delta_cols+="${delta_cols:+,
+  }${col_defs[$i]}"
     ins_cols+="${ins_cols:+, }$c"
     ins_vals+="${ins_vals:+, }s.$c"
     [[ "$c" == "ID" ]] || set_list+="${set_list:+, }$c = s.$c"
@@ -286,7 +288,11 @@ WHEN NOT MATCHED THEN INSERT ($ins_cols) VALUES ($ins_vals);"
   load_sql="ALTER TABLE $fq_table ADD COLUMN
   $add_cols;
 
-CREATE OR REPLACE TEMPORARY TABLE $delta_table LIKE $fq_table;
+-- Exactly the exported columns: COPY rejects files whose column count differs
+-- from the table's, and the target can have extra columns.
+CREATE OR REPLACE TEMPORARY TABLE $delta_table (
+  $delta_cols
+);
 
 COPY INTO $delta_table
   FROM $stage_path/
