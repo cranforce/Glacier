@@ -56,3 +56,9 @@ python3 -m unittest discover -s app/tests
 | `SNOWFORCE_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `SNOWFORCE_EXPORTS` stage |
 
 The last four exist only once the integration does.
+
+## History
+
+Set `TRACK_HISTORY = TRUE` on a job to keep type 2 history in `<TARGET_TABLE>__HISTORY`, the
+same as `history` in the CLI's `objects.conf` (see the [main README](../README.md#history)).
+The job's role needs to be able to create and write that table.

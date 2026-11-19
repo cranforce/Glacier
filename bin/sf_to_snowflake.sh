@@ -21,6 +21,11 @@
 #   -R  Reconcile: export the Ids that currently exist in Salesforce and flag
 #       or remove (per -D) every table row whose Id is gone. Catches deletes
 #       that have left the recycle bin. Doesn't load any other changes.
+#   -H  Keep type 2 history in <TABLE>__HISTORY: one row per version of each
+#       record, with VALID_FROM, VALID_TO, and IS_CURRENT. Turning it on for an
+#       existing table starts history from the table's current rows. A full
+#       reload (-r) keeps the history table; reconcile (-R) ends the current
+#       version of records gone from Salesforce.
 #   -r  Replace the table if it already exists (default: fail if it exists)
 #   -x  Create every column as VARCHAR instead of inferring types
 #   -k  Keep the local CSV after loading
@@ -43,8 +48,8 @@ SNOW_WAREHOUSE="${SNOW_WAREHOUSE:-DS_DATA_ENGINNNERING_WH}"
 usage() { awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; exit 1; }
 
 org="" table="" query="" query_file="" types_file="" delete_mode=off
-delta=0 reconcile=0 replace=0 all_text=0 keep=0
-while getopts "o:t:q:f:s:D:dRrxkh" opt; do
+delta=0 reconcile=0 replace=0 all_text=0 keep=0 history=0
+while getopts "o:t:q:f:s:D:dRHrxkh" opt; do
   case "$opt" in
     o) org="$OPTARG" ;;
     t) table="$OPTARG" ;;
@@ -54,6 +59,7 @@ while getopts "o:t:q:f:s:D:dRrxkh" opt; do
     D) delete_mode="$OPTARG" ;;
     d) delta=1 ;;
     R) reconcile=1 ;;
+    H) history=1 ;;
     r) replace=1 ;;
     x) all_text=1 ;;
     k) keep=1 ;;
@@ -238,16 +244,91 @@ for c in "${cols[@]}"; do col_defs+=("$c $(col_type "$c")"); done
 
 is_deleted="COALESCE(s.ISDELETED::BOOLEAN, FALSE)"
 
+add_cols="" delta_cols="" set_list="" ins_cols="" ins_vals="" h_hash="" s_hash=""
+for i in "${!cols[@]}"; do
+  c="${cols[$i]}"
+  add_cols+="${add_cols:+,
+  }IF NOT EXISTS ${col_defs[$i]}"
+  delta_cols+="${delta_cols:+,
+  }${col_defs[$i]}"
+  ins_cols+="${ins_cols:+, }$c"
+  ins_vals+="${ins_vals:+, }s.$c"
+  [[ "$c" == "ID" ]] || set_list+="${set_list:+, }$c = s.$c"
+  # Fields that change without the record changing: SystemModstamp moves on
+  # system updates, and the Last*Date fields when someone views the record.
+  case "$c" in
+    SYSTEMMODSTAMP|LASTVIEWEDDATE|LASTREFERENCEDDATE) ;;
+    *) h_hash+="${h_hash:+, }h.$c"; s_hash+="${s_hash:+, }s.$c" ;;
+  esac
+  if (( history && !reconcile )) && [[ "$c" =~ ^(VALID_FROM|VALID_TO|IS_CURRENT)$ ]]; then
+    echo "Can't track history: $c would clash with the history columns." >&2
+    exit 1
+  fi
+done
+
+# Type 2 history (-H). VALID_TO is the next version's VALID_FROM; the current
+# version has NULL. The table starts with only ID and the history columns so a
+# reconcile can create it; the other columns are added like the target's.
+hist_table="$SNOW_DB.$SNOW_SCHEMA.${table}__HISTORY"
+valid_type="$(col_type SYSTEMMODSTAMP)"
+hist_setup="CREATE TABLE IF NOT EXISTS $hist_table (
+  ID VARCHAR,
+  VALID_FROM $valid_type,
+  VALID_TO $valid_type,
+  IS_CURRENT BOOLEAN
+);"
+(( reconcile )) || hist_setup+="
+
+ALTER TABLE $hist_table ADD COLUMN
+  $add_cols;"
+
+# End the current version of every record not in the given query: it's gone
+# from Salesforce.
+hist_close_missing() {
+  echo "UPDATE $hist_table SET VALID_TO = CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ, IS_CURRENT = FALSE
+  WHERE IS_CURRENT AND ID NOT IN ($1);"
+}
+
+# Close each current version whose values differ from the source (one row per
+# Id), then add a current version for every changed or new record. Versions
+# older than what history already has are skipped, so re-fetched boundary
+# records and records closed by a reconcile don't come back.
+hist_apply() {
+  echo "UPDATE $hist_table h SET VALID_TO = s.SYSTEMMODSTAMP, IS_CURRENT = FALSE
+  FROM ($1) s
+  WHERE h.ID = s.ID AND h.IS_CURRENT AND s.SYSTEMMODSTAMP >= h.VALID_FROM
+    AND HASH($h_hash) <> HASH($s_hash);
+${2:-}
+INSERT INTO $hist_table ($ins_cols, VALID_FROM, VALID_TO, IS_CURRENT)
+  SELECT $ins_vals, s.SYSTEMMODSTAMP, NULL, TRUE
+  FROM ($1) s
+  WHERE NOT EXISTS (SELECT 1 FROM $hist_table h
+    WHERE h.ID = s.ID AND (h.IS_CURRENT OR h.VALID_TO > s.SYSTEMMODSTAMP));"
+}
+
 # 5. Build the Snowflake script
 if (( reconcile )); then
   ids_table="${table}__IDS"
+  prepare_sql=""
   if [[ "$delete_mode" == remove ]]; then
     apply_sql="DELETE FROM $fq_table WHERE ID NOT IN (SELECT ID FROM $ids_table);"
   else
-    apply_sql="ALTER TABLE $fq_table ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN;
-UPDATE $fq_table SET ISDELETED = TRUE
+    prepare_sql="ALTER TABLE $fq_table ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN;"
+    apply_sql="UPDATE $fq_table SET ISDELETED = TRUE
   WHERE ID NOT IN (SELECT ID FROM $ids_table)
     AND NOT COALESCE(ISDELETED::BOOLEAN, FALSE);"
+  fi
+  if (( history )); then
+    prepare_sql+="${prepare_sql:+
+
+}$hist_setup"
+    apply_sql="BEGIN;
+
+$(hist_close_missing "SELECT ID FROM $ids_table")
+
+$apply_sql
+
+COMMIT;"
   fi
 
   load_sql="CREATE OR REPLACE TEMPORARY TABLE $ids_table (ID VARCHAR);
@@ -259,20 +340,13 @@ COPY INTO $ids_table
   ON_ERROR = 'ABORT_STATEMENT'
   PURGE = TRUE;
 
-$apply_sql"
+${prepare_sql:+$prepare_sql
+
+}$apply_sql"
 elif (( delta )); then
   delta_table="${table}__DELTA"
-  add_cols="" delta_cols="" set_list="" ins_cols="" ins_vals=""
-  for i in "${!cols[@]}"; do
-    c="${cols[$i]}"
-    add_cols+="${add_cols:+,
-  }IF NOT EXISTS ${col_defs[$i]}"
-    delta_cols+="${delta_cols:+,
-  }${col_defs[$i]}"
-    ins_cols+="${ins_cols:+, }$c"
-    ins_vals+="${ins_vals:+, }s.$c"
-    [[ "$c" == "ID" ]] || set_list+="${set_list:+, }$c = s.$c"
-  done
+  latest="SELECT * FROM $delta_table
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1"
 
   if [[ "$delete_mode" == remove ]]; then
     merge_actions="WHEN MATCHED AND $is_deleted THEN DELETE
@@ -283,12 +357,40 @@ WHEN NOT MATCHED AND NOT $is_deleted THEN INSERT ($ins_cols) VALUES ($ins_vals);
 WHEN NOT MATCHED THEN INSERT ($ins_cols) VALUES ($ins_vals);"
   fi
 
+  merge_sql="MERGE INTO $fq_table t
+USING (
+  $latest
+) s
+ON t.ID = s.ID
+$merge_actions"
+
+  # History and the merge commit together, so a failure can't leave history
+  # behind the table (whose watermark decides what the next sync fetches).
+  # An empty history starts from the table's rows, before the merge.
+  hist_seed=""
+  if (( history )); then
+    hist_seed="$hist_setup
+
+INSERT INTO $hist_table ($ins_cols, VALID_FROM, VALID_TO, IS_CURRENT)
+  SELECT $ins_cols, SYSTEMMODSTAMP, NULL, TRUE FROM $fq_table
+  WHERE NOT EXISTS (SELECT 1 FROM $hist_table);"
+    merge_sql="BEGIN;
+
+$(hist_apply "$latest")
+
+$merge_sql
+
+COMMIT;"
+  fi
+
   # Add any fields that are new to the query. IF NOT EXISTS has to be repeated
   # for each column: Snowflake applies a single one only to the first column.
   load_sql="ALTER TABLE $fq_table ADD COLUMN
   $add_cols;
 
--- Exactly the exported columns: COPY rejects files whose column count differs
+${hist_seed:+$hist_seed
+
+}-- Exactly the exported columns: COPY rejects files whose column count differs
 -- from the table's, and the target can have extra columns.
 CREATE OR REPLACE TEMPORARY TABLE $delta_table (
   $delta_cols
@@ -301,13 +403,7 @@ COPY INTO $delta_table
   ON_ERROR = 'ABORT_STATEMENT'
   PURGE = TRUE;
 
-MERGE INTO $fq_table t
-USING (
-  SELECT * FROM $delta_table
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1
-) s
-ON t.ID = s.ID
-$merge_actions"
+$merge_sql"
 else
   create_kw="CREATE TABLE"
   (( replace )) && create_kw="CREATE OR REPLACE TABLE"
@@ -333,12 +429,32 @@ COPY INTO $fq_table
   MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE
   ON_ERROR = 'ABORT_STATEMENT'
   PURGE = TRUE;"
+
+  # The history table outlives full reloads: records whose values changed get
+  # a new version, and records no longer in Salesforce are closed.
+  if (( history )); then
+    load_sql+="
+
+$hist_setup
+
+BEGIN;
+
+$(hist_apply "SELECT * FROM $fq_table" "
+$(hist_close_missing "SELECT ID FROM $fq_table")
+")
+
+COMMIT;"
+  fi
 fi
 
 summary_sql="SELECT COUNT(*) AS TOTAL_ROWS, MAX(SYSTEMMODSTAMP) AS LATEST_SYSTEMMODSTAMP FROM $fq_table;"
 if [[ "$delete_mode" == flag ]]; then
   summary_sql="SELECT COUNT(*) AS TOTAL_ROWS, COUNT_IF(ISDELETED::BOOLEAN) AS DELETED_ROWS,
   MAX(SYSTEMMODSTAMP) AS LATEST_SYSTEMMODSTAMP FROM $fq_table;"
+fi
+if (( history )); then
+  summary_sql+="
+SELECT COUNT(*) AS HISTORY_VERSIONS, COUNT_IF(IS_CURRENT) AS CURRENT_VERSIONS FROM $hist_table;"
 fi
 
 cat > "$sql" <<EOF

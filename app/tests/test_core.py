@@ -121,6 +121,50 @@ class LoadSqlTest(unittest.TestCase):
         flag = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "flag")
         self.assertIn("UPDATE D.S.T SET ISDELETED = TRUE", flag[-1])
 
+    def test_delta_with_history(self):
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "remove",
+                                      "D.S.T__HISTORY")
+        self.assertTrue(stmts[1].startswith("CREATE TABLE IF NOT EXISTS D.S.T__HISTORY"))
+        self.assertIn("VALID_FROM TIMESTAMP_NTZ", stmts[1])
+        self.assertTrue(stmts[2].startswith("ALTER TABLE D.S.T__HISTORY ADD COLUMN"))
+        self.assertIn("WHERE NOT EXISTS (SELECT 1 FROM D.S.T__HISTORY)", stmts[3])  # seed
+        self.assertEqual(stmts[-1], "COMMIT")
+        self.assertTrue(stmts[-2].startswith("MERGE INTO D.S.T"))
+        self.assertTrue(stmts[-3].startswith("INSERT INTO D.S.T__HISTORY"))
+        close = stmts[stmts.index("BEGIN") + 1]
+        self.assertTrue(close.startswith("UPDATE D.S.T__HISTORY h SET VALID_TO = s.SYSTEMMODSTAMP"))
+        # SystemModstamp alone doesn't make a new version
+        self.assertIn("HASH(h.ID, h.ISDELETED, h.NAME) <> HASH(s.ID, s.ISDELETED, s.NAME)", close)
+        self.assertIn("QUALIFY ROW_NUMBER()", close)
+
+    def test_delta_without_history_unchanged(self):
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag")
+        self.assertEqual(len(stmts), 4)
+        self.assertNotIn("BEGIN", stmts)
+
+    def test_history_rejects_clashing_columns(self):
+        with self.assertRaisesRegex(core.ConfigError, "IS_CURRENT"):
+            core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols + ["IS_CURRENT"], self.types, "@x/",
+                                  "F", "flag", "D.S.T__HISTORY")
+
+    def test_full_load_with_history(self):
+        stmts = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True, "D.S.T__HISTORY")
+        self.assertTrue(stmts[1].startswith("COPY INTO D.S.T"))
+        self.assertEqual(stmts[-1], "COMMIT")
+        self.assertTrue(stmts[-2].startswith("INSERT INTO D.S.T__HISTORY"))
+        self.assertTrue(any("ID NOT IN (SELECT ID FROM (SELECT * FROM D.S.T))" in s for s in stmts))
+        self.assertIn("FROM (SELECT * FROM D.S.T) s", stmts[-2])
+        # An empty load doesn't close every record
+        self.assertEqual(len(core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", False,
+                                                       "D.S.T__HISTORY")), 1)
+
+    def test_reconcile_with_history(self):
+        stmts = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "remove", "D.S.T__HISTORY")
+        self.assertEqual(stmts[-1], "COMMIT")
+        self.assertTrue(stmts[-2].startswith("DELETE FROM D.S.T WHERE"))
+        self.assertIn("UPDATE D.S.T__HISTORY SET VALID_TO = CONVERT_TIMEZONE", stmts[-3])
+        self.assertTrue(stmts[-5].startswith("CREATE TABLE IF NOT EXISTS D.S.T__HISTORY"))
+
     def test_watermark_by_type(self):
         self.assertIn("TO_VARCHAR(MAX(SYSTEMMODSTAMP)", core.watermark_sql("T", "TIMESTAMP_NTZ"))
         self.assertIn("CONVERT_TIMEZONE('UTC', MAX(SYSTEMMODSTAMP))", core.watermark_sql("T", "TIMESTAMP_TZ"))

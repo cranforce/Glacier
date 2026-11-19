@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.SNOWFORCE_JOBS (
   TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name, uppercased; reserved words like ORDER are quoted',
   DELETE_MODE          VARCHAR DEFAULT 'flag' NOT NULL COMMENT 'off, flag, or remove',
   RECONCILE_AFTER_DAYS NUMBER DEFAULT 14 NOT NULL,
+  TRACK_HISTORY        BOOLEAN DEFAULT FALSE NOT NULL COMMENT 'Keep type 2 history in <TARGET_TABLE>__HISTORY',
   RUN_AS_USER          VARCHAR COMMENT 'NULL to run as the system service in the app role',
   RUN_AS_ROLE          VARCHAR COMMENT 'Needs RUN_AS_USER unless it is the app role',
   WAREHOUSE            VARCHAR NOT NULL,
@@ -43,6 +44,10 @@ CREATE TABLE IF NOT EXISTS {{APP}}.SNOWFORCE_JOBS (
   CREATED_AT           TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
   UPDATED_AT           TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- Tables created before history tracking
+ALTER TABLE {{APP}}.SNOWFORCE_JOBS ADD COLUMN
+  IF NOT EXISTS TRACK_HISTORY BOOLEAN DEFAULT FALSE NOT NULL COMMENT 'Keep type 2 history in <TARGET_TABLE>__HISTORY';
 
 -- One row per run; replaces the CLI's state/ folder.
 CREATE TABLE IF NOT EXISTS {{APP}}.SNOWFORCE_RUNS (

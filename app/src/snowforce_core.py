@@ -160,6 +160,15 @@ def reconcile_due(last_success, now, days):
 
 IS_DELETED = "COALESCE(s.ISDELETED::BOOLEAN, FALSE)"
 
+# Type 2 history: <TABLE>__HISTORY keeps one row per version of each record.
+# VALID_TO is the next version's VALID_FROM; the current version has NULL.
+HISTORY_SUFFIX = "__HISTORY"
+HISTORY_COLUMNS = ("VALID_FROM", "VALID_TO", "IS_CURRENT")
+# Fields that change without the record changing: SystemModstamp moves on
+# system updates, and the Last*Date fields when someone views the record.
+UNTRACKED = frozenset({"SYSTEMMODSTAMP", "LASTVIEWEDDATE", "LASTREFERENCEDDATE"})
+NOW_UTC = "CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
+
 
 def column_defs(columns, types):
     return [f"{c} {types.get(c, 'VARCHAR')}" for c in columns]
@@ -187,6 +196,12 @@ def add_columns_sql(fq_table, columns, types):
     return f"ALTER TABLE {fq_table} ADD COLUMN\n  {defs}"
 
 
+def latest_sql(delta_table):
+    """The delta's newest row per Id."""
+    return (f"SELECT * FROM {delta_table}\n"
+            "  QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1")
+
+
 def merge_sql(fq_table, delta_table, columns, delete_mode):
     sets = ", ".join(f"{c} = s.{c}" for c in columns if c != "ID")
     insert_cols = ", ".join(columns)
@@ -199,49 +214,129 @@ def merge_sql(fq_table, delta_table, columns, delete_mode):
         actions = (f"WHEN MATCHED THEN UPDATE SET {sets}\n"
                    f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})")
     return (f"MERGE INTO {fq_table} t\n"
-            "USING (\n"
-            f"  SELECT * FROM {delta_table}\n"
-            "  QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1\n"
-            ") s\n"
+            f"USING (\n  {latest_sql(delta_table)}\n) s\n"
             "ON t.ID = s.ID\n"
             f"{actions}")
 
 
-def full_load_statements(fq_table, columns, types, stage_path, file_format, has_rows):
-    statements = [create_table_sql(fq_table, columns, types, replace=True)]
-    if has_rows:
-        statements.append(copy_sql(fq_table, stage_path, file_format))
+def transaction(statements):
+    return ["BEGIN", *statements, "COMMIT"]
+
+
+def history_table_sql(history_table, valid_type):
+    """Create the history table if it's missing. Its other columns are added
+    like the target's, so a reconcile can create it without knowing them."""
+    return (f"CREATE TABLE IF NOT EXISTS {history_table} (\n"
+            f"  ID VARCHAR,\n  VALID_FROM {valid_type},\n  VALID_TO {valid_type},\n  IS_CURRENT BOOLEAN\n)")
+
+
+def history_setup_statements(history_table, columns, types):
+    clash = [c for c in columns if c in HISTORY_COLUMNS]
+    if clash:
+        raise ConfigError(f"Can't track history: {', '.join(clash)} would clash with the history columns")
+    return [history_table_sql(history_table, types.get("SYSTEMMODSTAMP", "VARCHAR")),
+            add_columns_sql(history_table, columns, types)]
+
+
+def history_seed_sql(history_table, fq_table, columns):
+    """Start an empty history from the target's rows, for history turned on for an existing table."""
+    cols = ", ".join(columns)
+    return (f"INSERT INTO {history_table} ({cols}, VALID_FROM, VALID_TO, IS_CURRENT)\n"
+            f"  SELECT {cols}, SYSTEMMODSTAMP, NULL, TRUE FROM {fq_table}\n"
+            f"  WHERE NOT EXISTS (SELECT 1 FROM {history_table})")
+
+
+def _row_hash(alias, columns):
+    return "HASH(" + ", ".join(f"{alias}.{c}" for c in columns if c not in UNTRACKED) + ")"
+
+
+def history_apply_statements(history_table, source, columns, close_missing=False):
+    """Close each current version whose values differ from source (a query with one row per Id),
+    then add a current version for every changed or new record.
+
+    Versions older than what history already has are skipped, so re-fetched
+    boundary records and records closed by a reconcile don't come back. With
+    close_missing, source is the whole object and current versions it no longer
+    has are closed.
+    """
+    cols = ", ".join(columns)
+    statements = [
+        f"UPDATE {history_table} h SET VALID_TO = s.SYSTEMMODSTAMP, IS_CURRENT = FALSE\n"
+        f"  FROM ({source}) s\n"
+        "  WHERE h.ID = s.ID AND h.IS_CURRENT AND s.SYSTEMMODSTAMP >= h.VALID_FROM\n"
+        f"    AND {_row_hash('h', columns)} <> {_row_hash('s', columns)}"]
+    if close_missing:
+        statements.append(close_history_sql(history_table, f"SELECT ID FROM ({source})"))
+    statements.append(
+        f"INSERT INTO {history_table} ({cols}, VALID_FROM, VALID_TO, IS_CURRENT)\n"
+        f"  SELECT {', '.join(f's.{c}' for c in columns)}, s.SYSTEMMODSTAMP, NULL, TRUE\n"
+        f"  FROM ({source}) s\n"
+        f"  WHERE NOT EXISTS (SELECT 1 FROM {history_table} h\n"
+        "    WHERE h.ID = s.ID AND (h.IS_CURRENT OR h.VALID_TO > s.SYSTEMMODSTAMP))")
     return statements
 
 
-def delta_statements(fq_table, delta_table, columns, types, stage_path, file_format, delete_mode):
+def close_history_sql(history_table, ids_sql):
+    """End the current version of every record not in ids_sql: it's gone from Salesforce."""
+    return (f"UPDATE {history_table} SET VALID_TO = {NOW_UTC}, IS_CURRENT = FALSE\n"
+            f"  WHERE IS_CURRENT AND ID NOT IN ({ids_sql})")
+
+
+def full_load_statements(fq_table, columns, types, stage_path, file_format, has_rows, history_table=None):
+    """With history_table, COPY is still statement 1 and the history work follows.
+    An empty load leaves history alone rather than closing every record."""
+    statements = [create_table_sql(fq_table, columns, types, replace=True)]
+    if has_rows:
+        statements.append(copy_sql(fq_table, stage_path, file_format))
+        if history_table:
+            statements += history_setup_statements(history_table, columns, types)
+            statements += transaction(history_apply_statements(
+                history_table, f"SELECT * FROM {fq_table}", columns, close_missing=True))
+    return statements
+
+
+def delta_statements(fq_table, delta_table, columns, types, stage_path, file_format, delete_mode,
+                     history_table=None):
+    """The MERGE is the last statement, or with history_table, the one before
+    COMMIT, after the history INSERT."""
     # The delta table has exactly the exported columns: COPY rejects files whose
     # column count differs from the table's, and the target can have extra columns.
     defs = ",\n  ".join(column_defs(columns, types))
-    return [
-        add_columns_sql(fq_table, columns, types),
+    statements = [add_columns_sql(fq_table, columns, types)]
+    if history_table:
+        statements += history_setup_statements(history_table, columns, types)
+        statements.append(history_seed_sql(history_table, fq_table, columns))
+    statements += [
         f"CREATE OR REPLACE TEMPORARY TABLE {delta_table} (\n  {defs}\n)",
         copy_sql(delta_table, stage_path, file_format),
-        merge_sql(fq_table, delta_table, columns, delete_mode),
     ]
+    merge = merge_sql(fq_table, delta_table, columns, delete_mode)
+    if not history_table:
+        return statements + [merge]
+    return statements + transaction(
+        history_apply_statements(history_table, latest_sql(delta_table), columns) + [merge])
 
 
-def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mode):
-    """Flag or remove every row whose Id no longer exists in Salesforce."""
+def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mode,
+                         history_table=None, valid_type="TIMESTAMP_NTZ"):
+    """Flag or remove every row whose Id no longer exists in Salesforce, and with
+    history_table, end those records' current versions. The flag or remove is the
+    last statement, or the one before COMMIT."""
     statements = [
         f"CREATE OR REPLACE TEMPORARY TABLE {ids_table} (ID VARCHAR)",
         copy_sql(ids_table, stage_path, file_format),
     ]
     if delete_mode == "remove":
-        statements.append(f"DELETE FROM {fq_table} WHERE ID NOT IN (SELECT ID FROM {ids_table})")
+        apply = f"DELETE FROM {fq_table} WHERE ID NOT IN (SELECT ID FROM {ids_table})"
     else:
-        statements += [
-            f"ALTER TABLE {fq_table} ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN",
-            f"UPDATE {fq_table} SET ISDELETED = TRUE\n"
-            f"  WHERE ID NOT IN (SELECT ID FROM {ids_table})\n"
-            "    AND NOT COALESCE(ISDELETED::BOOLEAN, FALSE)",
-        ]
-    return statements
+        statements.append(f"ALTER TABLE {fq_table} ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN")
+        apply = (f"UPDATE {fq_table} SET ISDELETED = TRUE\n"
+                 f"  WHERE ID NOT IN (SELECT ID FROM {ids_table})\n"
+                 "    AND NOT COALESCE(ISDELETED::BOOLEAN, FALSE)")
+    if not history_table:
+        return statements + [apply]
+    return statements + [history_table_sql(history_table, valid_type)] + transaction(
+        [close_history_sql(history_table, f"SELECT ID FROM {ids_table}"), apply])
 
 
 def watermark_sql(fq_table, data_type):

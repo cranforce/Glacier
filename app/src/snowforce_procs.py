@@ -284,6 +284,8 @@ def _run(session, app, job, mode, run_id):
     table = core.table_identifier(job.get("TARGET_TABLE") or core.default_table_name(sobject))
     fq_table = core.table_ref(db, schema, table)
     staging = {suffix: core.table_ref(db, schema, table + suffix) for suffix in ("__DELTA", "__IDS")}
+    history = (core.table_ref(db, schema, table + core.HISTORY_SUFFIX)
+               if job.get("TRACK_HISTORY") else None)
     delete_mode = (job.get("DELETE_MODE") or "flag").lower()
     if delete_mode not in core.DELETE_MODES:
         raise core.ConfigError(f"Unknown delete mode {delete_mode!r}")
@@ -308,7 +310,8 @@ def _run(session, app, job, mode, run_id):
         return _variant(session.call(f"{app}.SNOWFORCE_EXTRACT", conn, soql, all_rows, run_id))
 
     if mode == "reconcile":
-        return _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode, export)
+        return _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode, export,
+                          history, types)
 
     # Delta from the table's watermark, or a full load when there's nothing to go on
     since, note = None, None
@@ -339,31 +342,42 @@ def _run(session, app, job, mode, run_id):
         else:
             out = _execute(session, core.delta_statements(
                 fq_table, staging["__DELTA"], columns, types, exported["stage_path"], file_format,
-                delete_mode))
-            merged = out[-1][0]
+                delete_mode, history))
+            # With history, the statements end INSERT (versions), MERGE, COMMIT
+            merged = out[-2 if history else -1][0]
             result.update(inserted=merged.get("number of rows inserted"),
                           updated=merged.get("number of rows updated"),
                           deleted=merged.get("number of rows deleted"))
+            if history:
+                result["message"] = _versions_message(out[-3])
     else:
         result["mode"] = "full"
         result["message"] = note
         out = _execute(session, core.full_load_statements(
-            fq_table, columns, types, exported["stage_path"], file_format, exported["rows"] > 0))
-        result["inserted"] = sum(r.get("rows_loaded") or 0 for r in out[-1]) if exported["rows"] else 0
+            fq_table, columns, types, exported["stage_path"], file_format, exported["rows"] > 0, history))
+        result["inserted"] = sum(r.get("rows_loaded") or 0 for r in out[1]) if exported["rows"] else 0
+        if history and exported["rows"]:
+            # The statements end INSERT (versions), COMMIT
+            result["message"] = " ".join(filter(None, [note, _versions_message(out[-2])]))
 
     # Catch deletes that have left the recycle bin since the last successful sync
     if mode == "sync" and delete_mode != "off" and core.reconcile_due(
             _last_success(session, app, job["JOB_NAME"]), datetime.now(timezone.utc),
             int(job.get("RECONCILE_AFTER_DAYS") or 14)):
         reconciled = _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode,
-                                export)
+                                export, history, types)
         result["message"] = " ".join(filter(None, [result.get("message"), reconciled["message"]]))
         if delete_mode == "remove":
             result["deleted"] = (result.get("deleted") or 0) + (reconciled.get("deleted") or 0)
     return result
 
 
-def _reconcile(session, sobject, fq_table, ids_table, file_format, delete_mode, export):
+def _versions_message(insert_result):
+    return f"Recorded {insert_result[0].get('number of rows inserted') or 0} history versions."
+
+
+def _reconcile(session, sobject, fq_table, ids_table, file_format, delete_mode, export,
+               history=None, types=None):
     if delete_mode == "off":
         raise core.ConfigError("Deletes are off for this job; nothing to reconcile.")
     exported = export(core.build_ids_soql(sobject), False)
@@ -371,8 +385,10 @@ def _reconcile(session, sobject, fq_table, ids_table, file_format, delete_mode, 
         raise core.ConfigError("Salesforce returned no Ids; refusing to reconcile "
                                "(it would flag or remove every row).")
     out = _execute(session, core.reconcile_statements(
-        fq_table, ids_table, exported["stage_path"], file_format, delete_mode))
-    changed = out[-1][0].get("number of rows deleted" if delete_mode == "remove" else "number of rows updated")
+        fq_table, ids_table, exported["stage_path"], file_format, delete_mode,
+        history, (types or {}).get("SYSTEMMODSTAMP", "VARCHAR")))
+    # With history, the flag or remove is followed by COMMIT
+    changed = out[-2 if history else -1][0].get("number of rows deleted" if delete_mode == "remove" else "number of rows updated")
     verb = "Removed" if delete_mode == "remove" else "Flagged"
     return {"mode": "reconcile", "exported": exported["rows"], "deleted": changed,
             "message": f"Reconciled against {exported['rows']} current Ids; {verb.lower()} {changed} rows."}

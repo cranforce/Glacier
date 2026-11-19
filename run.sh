@@ -25,9 +25,14 @@ case "${1:-}" in
 esac
 
 configured() { awk '!/^[[:space:]]*(#|$)/ { print $1 }' objects.conf; }
-# Prints "<table> <delete mode>" for an object, or nothing if it isn't configured
+# Prints "<table> <delete mode> <history 0|1>" for an object, or nothing if it
+# isn't configured. After the table, a line can have a delete mode and "history".
 config_for() {
-  awk -v o="$1" -v d="$DELETE_MODE" '!/^[[:space:]]*(#|$)/ && $1 == o { print $2, ($3 == "" ? d : $3); exit }' objects.conf
+  awk -v o="$1" -v d="$DELETE_MODE" '!/^[[:space:]]*(#|$)/ && $1 == o {
+    mode = d; history = 0
+    for (i = 3; i <= NF; i++) if ($i == "history") history = 1; else mode = $i
+    print $2, mode, history; exit
+  }' objects.conf
 }
 
 if (( $# )); then objects=("$@"); else objects=($(configured)); fi
@@ -40,7 +45,7 @@ fi
 mkdir -p state
 failed=()
 for obj in "${objects[@]}"; do
-  read -r table delete_mode <<< "$(config_for "$obj")" || true
+  read -r table delete_mode history <<< "$(config_for "$obj")" || true
   if [[ -z "${table:-}" ]]; then
     echo "!! $obj is not in objects.conf; skipping." >&2
     failed+=("$obj")
@@ -48,7 +53,7 @@ for obj in "${objects[@]}"; do
   fi
 
   echo
-  echo "######## $obj -> $table ($cmd, deletes: $delete_mode)"
+  echo "######## $obj -> $table ($cmd, deletes: $delete_mode$( (( history )) && echo ", history: ${table}__HISTORY"))"
 
   # Capture the schema the first time an object is synced
   if [[ ! -e "schema/$obj.types.tsv" || ! -e "queries/$obj.soql" ]]; then
@@ -57,6 +62,7 @@ for obj in "${objects[@]}"; do
 
   load=(bin/sf_to_snowflake.sh -o "$SF_ORG" -t "$table" -f "queries/$obj.soql"
     -s "schema/$obj.types.tsv" -D "$delete_mode")
+  (( history )) && load+=(-H)
   state_file="state/$obj.last_sync"
   started="$(date +%s)"
   last_sync="$(cat "$state_file" 2>/dev/null || echo 0)"

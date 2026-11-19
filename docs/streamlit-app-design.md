@@ -72,7 +72,7 @@ The key split: **Salesforce access and Snowflake data access are separate.**
 | Table | Holds |
 | --- | --- |
 | `CONNECTIONS` | name, My Domain URL (`https://<domain>.my.salesforce.com`), client id, secret name, API version |
-| `JOBS` | connection, object, field list (or "all"), destination database, schema, and table (defaults to the object name), delete mode, run-as user, role, warehouse, schedule (cron), enabled |
+| `JOBS` | connection, object, field list (or "all"), destination database, schema, and table (defaults to the object name), delete mode, history on or off, run-as user, role, warehouse, schedule (cron), enabled |
 | `RUNS` | one row per run: job, start and end, mode (delta, full, reconcile), rows exported, rows merged, status, error |
 | `SFORCE_FIELDS` | cached `describe` per connection and object; replaces `schema/` and drives field pickers and column types |
 

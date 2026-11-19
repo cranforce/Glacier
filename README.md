@@ -16,7 +16,7 @@ Snowflake with the `snow` CLI.
 | Path | What it is |
 | --- | --- |
 | `project.env` | Salesforce org and Snowflake connection, database, schema, role, warehouse |
-| `objects.conf` | Objects to sync, their Snowflake table names, and optional per-object delete mode |
+| `objects.conf` | Objects to sync, their Snowflake table names, and optional per-object delete mode and history |
 | `queries/<Object>.soql` | Fields to export. Generated with every field if missing; edit freely. Not committed |
 | `schema/<Object>.*` | `sf sobject describe` output: raw JSON, readable field list, Snowflake type map. Not committed |
 | `bin/sf_schema.sh` | Captures schema for one or more objects |
@@ -73,6 +73,39 @@ Notes:
   problem can't wipe the table.
 - In `flag` mode, `./run.sh full` rebuilds the table from live records plus
   the recycle bin, so rows flagged longer ago than that drop out.
+
+## History
+
+Add `history` to an object's line in `objects.conf` to keep type 2 history
+alongside its table:
+
+```
+Account              ACCOUNT          history
+Order                ORDER     flag   history
+```
+
+The table itself doesn't change. `<TABLE>__HISTORY` gets one row per version of
+each record: the same columns, plus `VALID_FROM`, `VALID_TO`, and `IS_CURRENT`.
+
+- `VALID_FROM` is the version's `SystemModstamp`. `VALID_TO` is the next
+  version's `VALID_FROM`, or `NULL` for the current version. A record as of a
+  point in time is
+  `WHERE VALID_FROM <= :t AND (VALID_TO > :t OR VALID_TO IS NULL)`.
+- A sync adds a version only when a field value changed. `SystemModstamp`,
+  `LastViewedDate`, and `LastReferencedDate` don't count, so re-fetched
+  boundary records and system-only updates don't make new versions.
+- History records each record's state at each sync. Several edits between two
+  syncs become one version.
+- Deletes seen in the recycle bin become a version with `ISDELETED = TRUE`, in
+  `remove` mode too, so history keeps records the table drops. Records gone
+  from Salesforce entirely (found by reconcile or a full reload) get their
+  current version closed with no new one.
+- `./run.sh full` replaces the table but not its history: changed records get
+  new versions and missing ones are closed.
+- Turning history on for an existing table starts history from the table's
+  current rows on the next sync that has changes.
+- History and the table's merge commit together, so a failed load can't leave
+  them out of step.
 
 ## SSO prompts
 

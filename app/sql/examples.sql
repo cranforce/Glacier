@@ -48,6 +48,9 @@ SELECT 'SUBSCRIPTION', 'ODBM_PROD', 'Subscription__c',
        'CRM_DB', 'CMILLER_SF_PLAYGROUND', NULL,
        'flag', 'DS_DATA_ENGINNNERING_WH', '0 * * * * UTC';
 
+-- To keep type 2 history in SUBSCRIPTION__C__HISTORY:
+UPDATE SNOWFORCE_JOBS SET TRACK_HISTORY = TRUE WHERE JOB_NAME = 'SUBSCRIPTION';
+
 -- 4. Run it -------------------------------------------------------------------------
 -- Directly, as your current role:
 CALL SNOWFORCE_RUN_JOB('SUBSCRIPTION');            -- sync (full load the first time)
@@ -60,3 +63,7 @@ EXECUTE TASK SNOWFORCE_JOB_SUBSCRIPTION;           -- run it now
 
 -- 5. History --------------------------------------------------------------------------
 SELECT * FROM SNOWFORCE_RUNS ORDER BY STARTED_AT DESC LIMIT 20;
+
+-- With TRACK_HISTORY, every version of a record:
+SELECT * FROM CRM_DB.CMILLER_SF_PLAYGROUND.SUBSCRIPTION__C__HISTORY
+WHERE ID = '<record id>' ORDER BY VALID_FROM;
