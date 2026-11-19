@@ -2,7 +2,7 @@
 -- Replace CRM_DB.CMILLER_SF_PLAYGROUND if app.env points somewhere else.
 
 USE ROLE DS_DATA_ENGINEERING_ROLE;
-USE WAREHOUSE DS_DATA_ENGINNNERING_WH;
+USE WAREHOUSE SNOWFORCE_WH;
 USE SCHEMA CRM_DB.CMILLER_SF_PLAYGROUND;
 
 -- 1. Add a connection ---------------------------------------------------------
@@ -46,7 +46,7 @@ INSERT INTO SNOWFORCE_JOBS
 SELECT 'SUBSCRIPTION', 'ODBM_PROD', 'Subscription__c',
        ARRAY_CONSTRUCT('Account__c', 'Status__c', 'Start_Date__c', 'End_Date__c'),
        'CRM_DB', 'CMILLER_SF_PLAYGROUND', NULL,
-       'flag', 'DS_DATA_ENGINNNERING_WH', '0 * * * * UTC';
+       'flag', 'SNOWFORCE_WH', '0 * * * * UTC';
 
 -- To keep type 2 history in SUBSCRIPTION__C__HISTORY:
 UPDATE SNOWFORCE_JOBS SET TRACK_HISTORY = TRUE WHERE JOB_NAME = 'SUBSCRIPTION';
