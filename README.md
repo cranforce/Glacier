@@ -3,6 +3,9 @@
 Exports Salesforce objects with the `sf` CLI (Bulk API 2.0) and loads them into
 Snowflake with the `snow` CLI.
 
+Full documentation, including setup and running jobs inside Snowflake, is in
+[docs/](docs/index.md), published with GitHub Pages.
+
 ```
 ./run.sh                        # sync every object in objects.conf (delta + deletes)
 ./run.sh Subscription__c        # sync one object

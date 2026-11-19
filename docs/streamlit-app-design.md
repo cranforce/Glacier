@@ -1,3 +1,8 @@
+---
+title: Streamlit app design
+nav_order: 6
+---
+
 # Snowforce as a Streamlit in Snowflake app
 
 Status: proposal. Nothing here is built yet.
@@ -156,7 +161,7 @@ consumer key.
 0. **Prove the unknowns** (needs the integration above). From a throwaway procedure: get a token,
    run one small Bulk API query, write it to a stage. Then one task with `EXECUTE AS USER` and
    `USE ROLE`, to confirm the role switch works inside a task as well as interactively.
-1. **Engine without UI.** *In progress: deployed to `CMILLER_SF_PLAYGROUND`, see [app/README.md](../app/README.md).* Setup SQL, config tables, `SFORCE_EXTRACT` and `RUN_JOB`, all driven by
+1. **Engine without UI.** *In progress: deployed to `CMILLER_SF_PLAYGROUND`, see [Snowflake setup](snowflake-setup.md).* Setup SQL, config tables, `SFORCE_EXTRACT` and `RUN_JOB`, all driven by
    `CALL` and tasks. Parity-test against the CLI on one object (row counts, types, deletes).
 2. **Streamlit app.** The three pages above, deployed from the repo with `snow streamlit deploy`.
 3. **Cut over.** Move existing objects to jobs, compare tables, then retire or keep the CLI as a
