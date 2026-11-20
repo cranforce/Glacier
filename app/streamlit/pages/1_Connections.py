@@ -1,11 +1,11 @@
 """Add, edit, test, and remove Salesforce connections."""
 import streamlit as st
 
-import snowforce_forms as forms
-import snowforce_ui as ui
-from snowforce_ui import core
+import glacier_forms as forms
+import glacier_ui as ui
+from glacier_ui import core
 
-st.set_page_config(page_title="Connections · Snowforce", layout="wide")
+st.set_page_config(page_title="Connections · Glacier", layout="wide")
 st.title("Connections")
 st.caption("One per Salesforce org, logging in with the JWT bearer flow. "
            "See docs/snowflake-setup.md for the key pair and External Client App.")
@@ -63,7 +63,7 @@ if submitted:
             ui.session().sql(forms.save_connection_sql(app),
                              params=forms.row_param(conn)).collect()
             # A procedure's secrets are fixed when it's created
-            refreshed = ui.call("SNOWFORCE_REFRESH_CONNECTIONS")
+            refreshed = ui.call("GLACIER_REFRESH_CONNECTIONS")
         ui.list_objects.clear()
         ui.flash(f"Saved {conn['CONNECTION_NAME']}.")
         if "skipped" in refreshed:
@@ -81,7 +81,7 @@ if connections:
     if st.button("Test connection"):
         try:
             with st.spinner("Logging in to Salesforce..."):
-                st.json(ui.call("SNOWFORCE_TEST_CONNECTION", test_name))
+                st.json(ui.call("GLACIER_TEST_CONNECTION", test_name))
         except Exception as e:
             ui.show_error(e)
 
@@ -99,9 +99,9 @@ if connections:
                      (f" and its secret `{by_name[remove]['SECRET_NAME']}`." if drop_secret else "."))
             if st.checkbox(f"Yes, remove {remove}") and st.button("Remove", type="primary"):
                 try:
-                    ui.session().sql(f"DELETE FROM {app}.SNOWFORCE_CONNECTIONS WHERE CONNECTION_NAME = ?",
+                    ui.session().sql(f"DELETE FROM {app}.GLACIER_CONNECTIONS WHERE CONNECTION_NAME = ?",
                                      params=[remove]).collect()
-                    ui.call("SNOWFORCE_REFRESH_CONNECTIONS")
+                    ui.call("GLACIER_REFRESH_CONNECTIONS")
                     if drop_secret:
                         ui.session().sql(f"DROP SECRET IF EXISTS {forms.secret_name(app, remove)}").collect()
                     ui.flash(f"Removed {remove}.")

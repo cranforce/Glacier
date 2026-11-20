@@ -1,5 +1,5 @@
-title: Snowforce
-description: Sync Salesforce objects into Snowflake
+title: Glacier
+description: Sync enterprise systems into Snowflake
 remote_theme: just-the-docs/just-the-docs@v0.10.1
 plugins:
   - jekyll-remote-theme
@@ -13,7 +13,7 @@ mermaid:
   version: "10.9.1"
 
 aux_links:
-  "Snowforce on GitHub": https://github.com/cranforce/Snowforce
+  "Glacier on GitHub": https://github.com/cranforce/Snowforce
 
 gh_edit_link: true
 gh_edit_link_text: "Edit this page on GitHub"

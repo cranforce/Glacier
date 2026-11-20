@@ -3,9 +3,12 @@ title: Home
 nav_order: 1
 ---
 
-# Snowforce
+# Glacier
 
-Snowforce copies Salesforce objects into Snowflake tables and keeps them up to date. Each sync
+Glacier syncs enterprise systems into Snowflake. Salesforce is supported today; ShipHero and
+others are planned (see the [roadmap](glacier-roadmap.md)).
+
+For Salesforce, Glacier copies objects into Snowflake tables and keeps them up to date. Each sync
 exports only the records that changed since the last one (by `SystemModstamp`), merges them on
 `Id`, handles records deleted in Salesforce, and can keep a type 2 history of every change.
 
@@ -15,9 +18,9 @@ exports only the records that changed since the last one (by `SystemModstamp`), 
 | --- | --- | --- |
 | Runs on | Your machine | Snowflake (Python procedures and tasks) |
 | Talks to Salesforce with | The `sf` CLI, logged in as you | An External Client App, JWT bearer flow |
-| Configured in | `project.env` and `objects.conf` | The `SNOWFORCE_CONNECTIONS` and `SNOWFORCE_JOBS` tables |
+| Configured in | `project.env` and `objects.conf` | The `GLACIER_CONNECTIONS` and `GLACIER_JOBS` tables |
 | Scheduling | Whatever runs `./run.sh` | A Snowflake task per job |
-| Run history | `state/` folder | `SNOWFORCE_RUNS` table |
+| Run history | `state/` folder | `GLACIER_RUNS` table |
 | Status | In use | Phases 1 and 2 of the [Streamlit app design](streamlit-app-design.md): engine built, managed by SQL or a Streamlit app (early) |
 
 Both load tables the same way, so the [sync rules](how-syncing-works.md) apply to either.
@@ -30,6 +33,7 @@ Both load tables the same way, so the [sync rules](how-syncing-works.md) apply t
 - **[Jobs in Snowflake](jobs.md)**: create a job, run it, schedule it, and check its runs.
 - **[How syncing works](how-syncing-works.md)**: deltas, full loads, deletes, reconcile, and
   history.
+- **[Roadmap](glacier-roadmap.md)**: the move to `GLACIER_DB.APP` and connectors beyond Salesforce.
 
 ## Repository layout
 

@@ -1,12 +1,12 @@
-"""Create and edit sync jobs. Saving a job writes its SNOWFORCE_JOBS row and
-re-creates its task (SNOWFORCE_SAVE_JOB_TASK)."""
+"""Create and edit sync jobs. Saving a job writes its GLACIER_JOBS row and
+re-creates its task (GLACIER_SAVE_JOB_TASK)."""
 import streamlit as st
 
-import snowforce_forms as forms
-import snowforce_ui as ui
-from snowforce_ui import core
+import glacier_forms as forms
+import glacier_ui as ui
+from glacier_ui import core
 
-st.set_page_config(page_title="Jobs · Snowforce", layout="wide")
+st.set_page_config(page_title="Jobs · Glacier", layout="wide")
 st.title("Jobs")
 st.caption("A job syncs one Salesforce object into one Snowflake table. See docs/jobs.md.")
 ui.show_flash()
@@ -87,7 +87,7 @@ with left:
             if st.button(f"Describe {sobject}", key=key + "describe"):
                 try:
                     with st.spinner("Describing..."):
-                        ui.call("SNOWFORCE_DESCRIBE", conn, sobject)
+                        ui.call("GLACIER_DESCRIBE", conn, sobject)
                 except Exception as e:
                     ui.show_error(e)
                 else:
@@ -161,7 +161,7 @@ if st.button("Save job", type="primary"):
         if is_new and any(j["JOB_NAME"] == saved["JOB_NAME"] for j in jobs):
             raise core.ConfigError(f"A job named {saved['JOB_NAME']} already exists")
         ui.session().sql(forms.save_job_sql(app), params=forms.row_param(saved)).collect()
-        task = ui.call("SNOWFORCE_SAVE_JOB_TASK", saved["JOB_NAME"])
+        task = ui.call("GLACIER_SAVE_JOB_TASK", saved["JOB_NAME"])
         ui.flash(f"Saved {saved['JOB_NAME']}; task {task['task']} is {task['state']}. "
                  f"It loads {forms.target_table(saved)}.")
         st.session_state["_select_job"] = saved["JOB_NAME"]
@@ -178,7 +178,7 @@ if not is_new:
         if st.checkbox(f"Yes, remove {choice}", key=key + "confirm") and st.button("Remove job"):
             try:
                 ui.session().sql(f"DROP TASK IF EXISTS {core.task_name(app, choice)}").collect()
-                ui.session().sql(f"DELETE FROM {app}.SNOWFORCE_JOBS WHERE JOB_NAME = ?",
+                ui.session().sql(f"DELETE FROM {app}.GLACIER_JOBS WHERE JOB_NAME = ?",
                                  params=[choice]).collect()
                 ui.flash(f"Removed {choice}.")
                 st.session_state["_select_job"] = NEW

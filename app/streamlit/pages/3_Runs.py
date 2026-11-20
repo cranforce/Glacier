@@ -1,14 +1,14 @@
-"""Run history from SNOWFORCE_RUNS, and starting runs.
+"""Run history from GLACIER_RUNS, and starting runs.
 
 Runs start through the job's task (EXECUTE TASK), so they use the job's user,
 role, and warehouse, not the app's.
 """
 import streamlit as st
 
-import snowforce_ui as ui
-from snowforce_ui import core
+import glacier_ui as ui
+from glacier_ui import core
 
-st.set_page_config(page_title="Runs · Snowforce", layout="wide")
+st.set_page_config(page_title="Runs · Glacier", layout="wide")
 st.title("Runs")
 ui.show_flash()
 

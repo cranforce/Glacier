@@ -7,8 +7,8 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 sys.path.insert(0, os.path.join(HERE, "..", "streamlit"))
 
-import snowforce_core as core  # noqa: E402
-import snowforce_forms as forms  # noqa: E402
+import glacier_core as core  # noqa: E402
+import glacier_forms as forms  # noqa: E402
 
 APP = "CRM_DB.APP"
 ROLE = "APP_ROLE"
@@ -18,7 +18,7 @@ def job(**overrides):
     values = {"JOB_NAME": "subscription", "CONNECTION_NAME": "odbm_prod", "SOBJECT": "Subscription__c",
               "FIELDS": None, "TARGET_DATABASE": "crm_db", "TARGET_SCHEMA": "s", "TARGET_TABLE": "",
               "DELETE_MODE": "flag", "RECONCILE_AFTER_DAYS": 14, "TRACK_HISTORY": False,
-              "RUN_AS_USER": "", "RUN_AS_ROLE": "", "WAREHOUSE": "snowforce_wh",
+              "RUN_AS_USER": "", "RUN_AS_ROLE": "", "WAREHOUSE": "glacier_wh",
               "SCHEDULE": "0 * * * * UTC", "ENABLED": True}
     values.update(overrides)
     return values
@@ -74,7 +74,7 @@ class ConnectionTest(unittest.TestCase):
         self.assertEqual(conn["CONNECTION_NAME"], "ODBM_PROD")
         self.assertEqual(conn["MY_DOMAIN_URL"], "https://odbm.my.salesforce.com")
         self.assertEqual(conn["API_VERSION"], "64.0")
-        self.assertEqual(conn["SECRET_NAME"], "CRM_DB.APP.SNOWFORCE_SECRET_ODBM_PROD")
+        self.assertEqual(conn["SECRET_NAME"], "CRM_DB.APP.GLACIER_SECRET_ODBM_PROD")
         self.assertIsNone(conn["DESCRIPTION"])
 
     def test_keeps_existing_secret_name(self):
@@ -101,7 +101,7 @@ class ConnectionTest(unittest.TestCase):
 class MergeTest(unittest.TestCase):
     def test_job_merge(self):
         sql = forms.save_job_sql(APP)
-        self.assertTrue(sql.startswith("MERGE INTO CRM_DB.APP.SNOWFORCE_JOBS t"))
+        self.assertTrue(sql.startswith("MERGE INTO CRM_DB.APP.GLACIER_JOBS t"))
         self.assertIn("ON t.JOB_NAME = s.v:JOB_NAME::VARCHAR", sql)
         self.assertIn("FIELDS = AS_ARRAY(s.v:FIELDS)", sql)
         self.assertIn("ENABLED = s.v:ENABLED::BOOLEAN", sql)

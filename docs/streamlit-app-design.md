@@ -3,13 +3,13 @@ title: Streamlit app design
 nav_order: 6
 ---
 
-# Snowforce as a Streamlit in Snowflake app
+# Glacier as a Streamlit in Snowflake app
 
 Status: phases 1 and 2 are built (engine and app); see [Phases](#phases).
 
 ## Goal
 
-Run Snowforce entirely inside Snowflake, managed from a Streamlit app, with:
+Run Glacier entirely inside Snowflake, managed from a Streamlit app, with:
 
 - **Multiple Salesforce connections** (orgs, sandboxes), each with its own credentials.
 - **Any Salesforce object** imported into a **destination database, schema, and table chosen per
@@ -18,7 +18,7 @@ Run Snowforce entirely inside Snowflake, managed from a Streamlit app, with:
   words keep their name and are double-quoted in SQL (`Order` → `"ORDER"`), so queries against
   those tables need the quotes too.
 - **Per-job choice of Snowflake user, role, and warehouse** that the load runs as.
-- The sync behaviour Snowforce has today: SystemModstamp deltas merged on Id, typed columns from the
+- The sync behaviour Glacier has today: SystemModstamp deltas merged on Id, typed columns from the
   Salesforce schema, delete handling (`off` / `flag` / `remove`), and the reconcile safety net.
 
 ## What the platform allows (and what that means for the design)
@@ -32,13 +32,13 @@ Run Snowforce entirely inside Snowflake, managed from a Streamlit app, with:
 | Network rules accept a one-level wildcard, e.g. `*.my.salesforce.com` | [CREATE NETWORK RULE](https://docs.snowflake.com/en/sql-reference/sql/create-network-rule) | One network rule covers every production org; `*.sandbox.my.salesforce.com` covers sandboxes. New connections need no network change. |
 | An external access integration can allow `ALLOWED_AUTHENTICATION_SECRETS = ALL` | [CREATE EXTERNAL ACCESS INTEGRATION](https://docs.snowflake.com/en/sql-reference/sql/create-external-access-integration) | **Decided:** the integration allows all secrets, so new connections need no admin change. |
 | `CREATE SECRET` values are masked in query history | Tested in `CMILLER_SF_PLAYGROUND`, 2026-10-29 (`SECRET_STRING = '☺☺☺☺☺'`) | The app can safely create a connection's secret from a form. |
-| Only `ACCOUNTADMIN` or a role with `CREATE INTEGRATION` can create an external access integration. The existing `SALESFORCE_ACCESS_INTEGRATION` belongs to `CRM_DB.NPC_EU_INT_API` and only allows that project's secrets | `DESCRIBE INTEGRATION` | Snowforce needs its own integration, created once by an admin. |
+| Only `ACCOUNTADMIN` or a role with `CREATE INTEGRATION` can create an external access integration. The existing `SALESFORCE_ACCESS_INTEGRATION` belongs to `CRM_DB.NPC_EU_INT_API` and only allows that project's secrets | `DESCRIBE INTEGRATION` | Glacier needs its own integration, created once by an admin. |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph App["Snowforce app objects (owned by the app role)"]
+  subgraph App["Glacier app objects (owned by the app role)"]
     UI["Streamlit app"]
     CFG[("Config tables<br/>CONNECTIONS, JOBS, RUNS, SFORCE_FIELDS")]
     SEC["Secrets<br/>(one per connection)"]
@@ -124,11 +124,11 @@ CREATE NETWORK RULE <app_db>.<app_schema>.SALESFORCE_EGRESS
                 '*.my.salesforce.com', '*.sandbox.my.salesforce.com');
 
 -- ACCOUNTADMIN (or a role with CREATE INTEGRATION):
-CREATE EXTERNAL ACCESS INTEGRATION SNOWFORCE_SALESFORCE_EAI
+CREATE EXTERNAL ACCESS INTEGRATION GLACIER_SALESFORCE_EAI
   ALLOWED_NETWORK_RULES = (<app_db>.<app_schema>.SALESFORCE_EGRESS)
   ALLOWED_AUTHENTICATION_SECRETS = ALL
   ENABLED = TRUE;
-GRANT USAGE ON INTEGRATION SNOWFORCE_SALESFORCE_EAI TO ROLE <app role>;
+GRANT USAGE ON INTEGRATION GLACIER_SALESFORCE_EAI TO ROLE <app role>;
 ```
 
 `ALLOWED_AUTHENTICATION_SECRETS = ALL` means adding a connection never needs an admin. That is safe
@@ -164,7 +164,7 @@ consumer key.
 1. **Engine without UI.** *In progress: deployed to `CMILLER_SF_PLAYGROUND`, see [Snowflake setup](snowflake-setup.md).* Setup SQL, config tables, `SFORCE_EXTRACT` and `RUN_JOB`, all driven by
    `CALL` and tasks. Parity-test against the CLI on one object (row counts, types, deletes).
 2. **Streamlit app.** *Scaffolded: `app/streamlit/`, deployed by `app/deploy.sh` as
-   `SNOWFORCE_APP`.* The three pages above.
+   `GLACIER_APP`.* The three pages above.
 3. **Cut over.** Move existing objects to jobs, compare tables, then retire or keep the CLI as a
    fallback.
 
@@ -179,11 +179,19 @@ consumer key.
 
 ## Where the app lives
 
-**Decided (for now):** `CRM_DB.CMILLER_SF_PLAYGROUND`, owned by `DS_DATA_ENGINEERING_ROLE`. Every
-app object is prefixed `SNOWFORCE_` to keep it apart from the data tables in that schema.
+**Decided (2026-11-20):** its own database and schema, `GLACIER_DB.APP`, owned by a dedicated
+`GLACIER_APP_ROLE` and running on `GLACIER_WH`. A Snowflake admin creates them once
+(`app/deploy.sh admin-sql setup`).
 
-This suits building and testing. Before other people or service users run jobs, move the app to
-a dedicated schema and role (for example `CRM_DB.SNOWFORCE` and `SNOWFORCE_APP_ROLE`), because
-every run-as user must be granted the owner role, and `DS_DATA_ENGINEERING_ROLE` is broad. The
-setup scripts take the schema and role as settings, so moving means changing them, re-running
-the scripts, and re-entering the connection secrets.
+The engine was built and tested in `CRM_DB.CMILLER_SF_PLAYGROUND`, owned by
+`DS_DATA_ENGINEERING_ROLE`. That role is broad, and every run-as user must be granted the task
+owner role, so the app moves to a role that owns nothing but the app. Synced Salesforce tables
+go to `GLACIER_DB.NPC_SALESFORCE_PROD_RAW` by default, but each job names its own destination.
+
+App objects keep the `GLACIER_` prefix even in their own schema, so tasks, procedures, and secrets
+are easy to recognise in account-wide views such as `TASK_HISTORY` and `QUERY_HISTORY`.
+
+The settings are in `app/app.env`. Moving means an admin runs the setup SQL, `deploy.sh` runs
+against the new schema, and the connections and jobs are copied over, with each connection's
+private key entered again: secret values can't be read back. See the
+[Glacier roadmap](glacier-roadmap.md).

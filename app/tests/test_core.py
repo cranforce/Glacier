@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 SRC = os.path.join(os.path.dirname(__file__), "..", "src")
 sys.path.insert(0, SRC)
 
-import snowforce_core as core  # noqa: E402
+import glacier_core as core  # noqa: E402
 
 
 class NamesTest(unittest.TestCase):
@@ -192,16 +192,16 @@ class DdlTest(unittest.TestCase):
 
     def test_task_without_user(self):
         ddl = core.task_ddl("DB.SC", "APP_ROLE", self.job())
-        self.assertIn("CREATE OR REPLACE TASK DB.SC.SNOWFORCE_JOB_SUBSCRIPTION", ddl)
+        self.assertIn("CREATE OR REPLACE TASK DB.SC.GLACIER_JOB_SUBSCRIPTION", ddl)
         self.assertIn("SCHEDULE = 'USING CRON 0 * * * * UTC'", ddl)
         self.assertNotIn("EXECUTE AS USER", ddl)
         self.assertNotIn("USE ROLE", ddl)
-        self.assertIn("CALL DB.SC.SNOWFORCE_RUN_JOB('SUBSCRIPTION');", ddl)
+        self.assertIn("CALL DB.SC.GLACIER_RUN_JOB('SUBSCRIPTION');", ddl)
 
     def test_task_with_user_and_role(self):
         ddl = core.task_ddl("DB.SC", "APP_ROLE",
-                            self.job(RUN_AS_USER="svc.snowforce", RUN_AS_ROLE="loader_role", SCHEDULE=None))
-        self.assertIn('EXECUTE AS USER "SVC.SNOWFORCE"', ddl)
+                            self.job(RUN_AS_USER="svc.glacier", RUN_AS_ROLE="loader_role", SCHEDULE=None))
+        self.assertIn('EXECUTE AS USER "SVC.GLACIER"', ddl)
         self.assertIn("USE ROLE LOADER_ROLE;", ddl)
         self.assertNotIn("SCHEDULE", ddl)
 

@@ -8,7 +8,7 @@ binds a Python None as the text 'None', but a JSON null becomes SQL NULL.
 import json
 import re
 
-import snowforce_core as core
+import glacier_core as core
 
 MY_DOMAIN_URL = re.compile(r"^https://[A-Za-z0-9-]+(\.sandbox)?\.my\.salesforce\.com/?$")
 API_VERSION = re.compile(r"^\d{2,3}\.0$")
@@ -22,7 +22,7 @@ SCHEDULES = {
     "Daily, 6 a.m. Eastern": "0 6 * * * America/Detroit",
 }
 
-# SNOWFORCE_JOBS columns the app edits, and the type each is cast to from JSON
+# GLACIER_JOBS columns the app edits, and the type each is cast to from JSON
 JOB_COLUMNS = (
     ("JOB_NAME", "VARCHAR"),
     ("CONNECTION_NAME", "VARCHAR"),
@@ -64,7 +64,7 @@ def _text(value):
 
 def secret_name(app, connection_name):
     """The secret the app creates for a connection's private key."""
-    return f"{app}.SNOWFORCE_SECRET_{core.identifier(connection_name, 'connection name')}"
+    return f"{app}.GLACIER_SECRET_{core.identifier(connection_name, 'connection name')}"
 
 
 def validate_private_key(pem):
@@ -75,7 +75,7 @@ def validate_private_key(pem):
 
 
 def validate_connection(values, app):
-    """A SNOWFORCE_CONNECTIONS row from the form's values."""
+    """A GLACIER_CONNECTIONS row from the form's values."""
     name = core.identifier(_text(values.get("CONNECTION_NAME")), "connection name")
     url = _text(values.get("MY_DOMAIN_URL")) or ""
     if not MY_DOMAIN_URL.match(url):
@@ -109,7 +109,7 @@ def create_secret_sql(secret, pem):
 # --- Jobs -------------------------------------------------------------------------
 
 def validate_job(values, app, owner_role):
-    """A SNOWFORCE_JOBS row from the form's values, checked the way a run and its task will."""
+    """A GLACIER_JOBS row from the form's values, checked the way a run and its task will."""
     sobject = core.sf_name(_text(values.get("SOBJECT")), "object name")
     fields = values.get("FIELDS")
     if fields is not None:
@@ -182,11 +182,11 @@ def merge_sql(table, key, columns):
 
 
 def save_job_sql(app):
-    return merge_sql(f"{app}.SNOWFORCE_JOBS", "JOB_NAME", JOB_COLUMNS)
+    return merge_sql(f"{app}.GLACIER_JOBS", "JOB_NAME", JOB_COLUMNS)
 
 
 def save_connection_sql(app):
-    return merge_sql(f"{app}.SNOWFORCE_CONNECTIONS", "CONNECTION_NAME", CONNECTION_COLUMNS)
+    return merge_sql(f"{app}.GLACIER_CONNECTIONS", "CONNECTION_NAME", CONNECTION_COLUMNS)
 
 
 def row_param(row):

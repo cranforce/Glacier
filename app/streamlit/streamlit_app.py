@@ -1,4 +1,4 @@
-"""Snowforce: manage Salesforce connections and sync jobs.
+"""Glacier: manage Salesforce connections and sync jobs.
 
 The pages are in pages/. Everything they do goes through the app's tables and
 procedures (see app/README.md), so a job behaves the same whether it was set
@@ -6,10 +6,10 @@ up here or in SQL.
 """
 import streamlit as st
 
-import snowforce_ui as ui
+import glacier_ui as ui
 
-st.set_page_config(page_title="Snowforce", layout="wide")
-st.title("Snowforce")
+st.set_page_config(page_title="Glacier", layout="wide")
+st.title("Glacier")
 st.caption("Sync Salesforce objects into Snowflake")
 
 ctx = ui.context()
@@ -19,7 +19,7 @@ if not ui.salesforce_ready():
     st.warning(
         "The Salesforce procedures don't exist yet, so connections can't be tested and jobs "
         "can't run. A Snowflake admin needs to create the external access integration "
-        "(`app/deploy.sh admin-sql`); then add a connection on the **Connections** page.")
+        "(`app/deploy.sh admin-sql integration`); then add a connection on the **Connections** page.")
 
 connections = ui.connections()
 jobs = ui.jobs()
