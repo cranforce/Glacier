@@ -1,6 +1,7 @@
--- Glacier procedures that don't read Salesforce secrets. The ones that do are
--- created by GLACIER_REFRESH_CONNECTIONS, because their secret list changes
--- with the connections. deploy.sh uploads the code and fills in {{...}}.
+-- Glacier procedures that don't read connection secrets. The ones that do, one
+-- set per connector (GLACIER_<CONNECTOR>_EXTRACT and so on), are created by
+-- GLACIER_REFRESH_CONNECTIONS, because their secret list changes with the
+-- connections. deploy.sh uploads the code and fills in {{...}}.
 
 USE ROLE {{APP_ROLE}};
 USE WAREHOUSE {{APP_WAREHOUSE}};
@@ -28,10 +29,11 @@ CREATE OR REPLACE PROCEDURE {{APP}}.GLACIER_SAVE_JOB_TASK(
   HANDLER = 'glacier_procs.save_job_task'
   EXECUTE AS OWNER;
 
--- Re-creates the Salesforce procedures with every connection's secret.
+-- Re-creates each connector's procedures with its connections' secrets, for
+-- every connector whose integration (GLACIER_<CONNECTOR>_EAI) exists.
 -- Call it after adding or removing a connection.
 CREATE OR REPLACE PROCEDURE {{APP}}.GLACIER_REFRESH_CONNECTIONS(
-    INTEGRATION VARCHAR DEFAULT '{{APP_INTEGRATION}}', APP_SCHEMA VARCHAR DEFAULT '{{APP}}')
+    APP_SCHEMA VARCHAR DEFAULT '{{APP}}')
   RETURNS VARIANT
   LANGUAGE PYTHON
   RUNTIME_VERSION = '3.11'

@@ -17,7 +17,7 @@ Deploy the Glacier engine into Snowflake and connect it to a Salesforce org. Onc
 ```mermaid
 flowchart LR
   TASK["Task per job"] -- "CALL" --> RUN["GLACIER_RUN_JOB<br/>caller's rights"]
-  RUN -- "CALL" --> EXT["GLACIER_EXTRACT<br/>owner's rights"]
+  RUN -- "CALL" --> EXT["GLACIER_SALESFORCE_EXTRACT<br/>owner's rights"]
   SEC["Secret per connection"] -.-> EXT
   EXT -- "Bulk API 2.0<br/>via the integration" --> SF["Salesforce"]
   EXT -- "CSV parts" --> STG[("GLACIER_EXPORTS stage")]
@@ -54,7 +54,6 @@ the job's role, so a job can only write where that role can write.
 | `APP_DB`, `APP_SCHEMA` | `GLACIER_DB`, `APP` | The app's own database and schema (every object is prefixed `GLACIER_`) |
 | `APP_ROLE` | `GLACIER_APP_ROLE` | Owns the app schema, its objects, and the job tasks |
 | `APP_WAREHOUSE` | `GLACIER_WH` | Warehouse for deploys, the Streamlit app, and job runs |
-| `APP_INTEGRATION` | `GLACIER_SALESFORCE_EAI` | External access integration the admin creates |
 | `SNOW_CONNECTION` | `ODBM` | `snow` connection used to deploy |
 
 The database, schema, role, and warehouse are created once by a Snowflake admin. Print the SQL
@@ -95,18 +94,19 @@ python3 -m unittest discover -s app/tests
 
 ## 3. Create the external access integration
 
-This needs `ACCOUNTADMIN` or a role with `CREATE INTEGRATION`, and the network rule from step 2.
-Print the SQL and send it to a Snowflake admin:
+Each connector needs its own integration, `GLACIER_<CONNECTOR>_EAI`. This needs `ACCOUNTADMIN` or
+a role with `CREATE INTEGRATION`, and the connector's network rule from step 2. Print the SQL and
+send it to a Snowflake admin:
 
 ```sh
-app/deploy.sh admin-sql integration
+app/deploy.sh admin-sql integration salesforce
 ```
 
 It creates `GLACIER_SALESFORCE_EAI`, which lets the procedures reach `login.salesforce.com`,
 `test.salesforce.com`, `*.my.salesforce.com`, and `*.sandbox.my.salesforce.com`, and grants its
 use to the app role. It allows every secret, so adding a connection later needs no admin.
 
-Until it exists, `GLACIER_REFRESH_CONNECTIONS` reports that the integration is missing, and the
+Until it exists, `GLACIER_REFRESH_CONNECTIONS` reports that it skipped Salesforce, and the
 procedures that talk to Salesforce aren't created.
 
 The same file has the per-user grants needed for jobs that [run as a user](jobs.md#run-as-a-user-and-role).
@@ -157,27 +157,36 @@ CREATE OR REPLACE SECRET GLACIER_SECRET_ODBM_PROD
 ...
 -----END PRIVATE KEY-----';
 
-INSERT INTO GLACIER_CONNECTIONS
-  (CONNECTION_NAME, MY_DOMAIN_URL, CLIENT_ID, USERNAME, SECRET_NAME, DESCRIPTION)
-VALUES ('ODBM_PROD', 'https://ourdailybreadministries.my.salesforce.com',
-        '<consumer key>', '<integration user username>',
-        'GLACIER_DB.APP.GLACIER_SECRET_ODBM_PROD', 'Production org');
+INSERT INTO GLACIER_CONNECTIONS (CONNECTION_NAME, CONNECTOR, SETTINGS, SECRET_NAME, DESCRIPTION)
+SELECT 'ODBM_PROD', 'salesforce',
+       OBJECT_CONSTRUCT('MY_DOMAIN_URL', 'https://ourdailybreadministries.my.salesforce.com',
+                        'CLIENT_ID', '<consumer key>',
+                        'USERNAME', '<integration user username>',
+                        'API_VERSION', '64.0'),
+       'GLACIER_DB.APP.GLACIER_SECRET_ODBM_PROD', 'Production org';
 ```
 
 | Column | Notes |
 | --- | --- |
 | `CONNECTION_NAME` | A plain identifier (letters, digits, `_`); jobs refer to it |
+| `CONNECTOR` | `salesforce` |
+| `SETTINGS` | The connector's settings, below |
+| `SECRET_NAME` | The secret, fully qualified. The app role must own it or have `USAGE` on it |
+
+Salesforce's `SETTINGS`:
+
+| Key | Notes |
+| --- | --- |
 | `MY_DOMAIN_URL` | `https://<domain>.my.salesforce.com`. A `.sandbox.my.salesforce.com` URL logs in through `test.salesforce.com` |
 | `CLIENT_ID` | The External Client App's consumer key |
 | `USERNAME` | The integration user the jobs run as in Salesforce |
 | `API_VERSION` | Defaults to `64.0` |
-| `SECRET_NAME` | The secret, fully qualified. The app role must own it or have `USAGE` on it |
 
 Then re-create the Salesforce procedures so they can read the new secret, and test the login:
 
 ```sql
 CALL GLACIER_REFRESH_CONNECTIONS();
-CALL GLACIER_TEST_CONNECTION('ODBM_PROD');   -- returns the instance URL and a count of objects
+CALL GLACIER_SALESFORCE_TEST_CONNECTION('ODBM_PROD');   -- returns the instance URL and a count of objects
 ```
 
 Call `GLACIER_REFRESH_CONNECTIONS()` after every connection you add or remove: a procedure's
@@ -189,13 +198,13 @@ secrets are fixed when it's created. `deploy.sh` calls it too.
 | --- | --- | --- |
 | `GLACIER_RUN_JOB(job, [mode])` | caller | Sync, full reload, or reconcile one job; logs to `GLACIER_RUNS` |
 | `GLACIER_SAVE_JOB_TASK(job)` | owner | Create or replace the job's task from its `GLACIER_JOBS` row |
-| `GLACIER_REFRESH_CONNECTIONS()` | owner | Re-create the Salesforce procedures with every connection's secret |
-| `GLACIER_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
-| `GLACIER_LIST_OBJECTS(conn)` | owner | List queryable objects |
-| `GLACIER_DESCRIBE(conn, object)` | owner | Capture an object's fields into `GLACIER_FIELDS` |
-| `GLACIER_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
+| `GLACIER_REFRESH_CONNECTIONS()` | owner | Re-create each connector's procedures with its connections' secrets |
+| `GLACIER_SALESFORCE_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
+| `GLACIER_SALESFORCE_LIST_OBJECTS(conn)` | owner | List queryable objects |
+| `GLACIER_SALESFORCE_DESCRIBE(conn, object)` | owner | Capture an object's fields into `GLACIER_FIELDS` |
+| `GLACIER_SALESFORCE_EXTRACT(conn, query, include_deleted, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
 
-The last four exist only once the integration does.
+The last four are Salesforce's own; each connector gets its set, `GLACIER_<CONNECTOR>_<ACTION>`, holding only its connections' secrets. They exist only once the connector's integration does.
 
 ## Rotating the key
 
@@ -204,14 +213,14 @@ Before the certificate expires:
 1. Make a new key pair (step 4).
 2. Have the Salesforce admin upload the new certificate to the External Client App.
 3. Replace the secret with the new key: `CREATE OR REPLACE SECRET GLACIER_SECRET_ODBM_PROD ...`.
-4. `CALL GLACIER_REFRESH_CONNECTIONS();` then `CALL GLACIER_TEST_CONNECTION('ODBM_PROD');`
+4. `CALL GLACIER_REFRESH_CONNECTIONS();` then `CALL GLACIER_SALESFORCE_TEST_CONNECTION('ODBM_PROD');`
 
 ## Troubleshooting
 
 | Message | Fix |
 | --- | --- |
-| `Integration GLACIER_SALESFORCE_EAI doesn't exist yet, or this role can't use it` | Step 3 hasn't been done, or the grant to the app role is missing |
+| `Skipped salesforce (no GLACIER_SALESFORCE_EAI)` | Step 3 hasn't been done, or the grant to the app role is missing |
 | `Connection X has no usable secret` | Call `GLACIER_REFRESH_CONNECTIONS()`; check `SECRET_NAME` and that the app role can use the secret |
-| `Connection X has no CLIENT_ID` (or `USERNAME`) | Fill in the column on the connection row |
-| Unknown procedure `GLACIER_TEST_CONNECTION` | The integration is missing (step 3), or `GLACIER_REFRESH_CONNECTIONS()` hasn't run since |
+| `Consumer key is required` (or `Integration user`) | Fill in the setting on the connection |
+| Unknown procedure `GLACIER_SALESFORCE_TEST_CONNECTION` | The integration is missing (step 3), or `GLACIER_REFRESH_CONNECTIONS()` hasn't run since |
 | Salesforce login errors | Check the certificate is uploaded, the user is pre-authorized through the permission set, and the consumer key and username match |

@@ -4,16 +4,16 @@
 USE ROLE {{APP_ROLE}};
 USE WAREHOUSE {{APP_WAREHOUSE}};
 
--- One row per Salesforce org, logging in with the JWT bearer flow. The secret is
--- a GENERIC_STRING secret holding the PEM private key whose certificate is
--- uploaded to the External Client App.
+-- One row per source system account, e.g. a Salesforce org. SETTINGS holds the
+-- connector's own settings; for Salesforce, MY_DOMAIN_URL, CLIENT_ID, USERNAME,
+-- and API_VERSION. The secret is a GENERIC_STRING secret with the credential:
+-- for Salesforce, the PEM private key whose certificate is uploaded to the
+-- External Client App.
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_CONNECTIONS (
   CONNECTION_NAME VARCHAR NOT NULL PRIMARY KEY,
-  MY_DOMAIN_URL   VARCHAR NOT NULL COMMENT 'https://<domain>.my.salesforce.com',
-  CLIENT_ID       VARCHAR COMMENT 'External Client App consumer key',
-  USERNAME        VARCHAR COMMENT 'Salesforce integration user the jobs run as',
-  API_VERSION     VARCHAR DEFAULT '64.0' NOT NULL,
-  SECRET_NAME     VARCHAR NOT NULL COMMENT 'Fully qualified GENERIC_STRING secret with the private key',
+  CONNECTOR       VARCHAR NOT NULL COMMENT 'salesforce',
+  SETTINGS        OBJECT NOT NULL COMMENT 'The connector''s settings',
+  SECRET_NAME     VARCHAR NOT NULL COMMENT 'Fully qualified GENERIC_STRING secret with the credential',
   DESCRIPTION     VARCHAR,
   CREATED_AT      TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
   UPDATED_AT      TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP()
@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_CONNECTIONS (
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_JOBS (
   JOB_NAME             VARCHAR NOT NULL PRIMARY KEY,
   CONNECTION_NAME      VARCHAR NOT NULL,
-  SOBJECT              VARCHAR NOT NULL COMMENT 'Salesforce object API name',
-  FIELDS               ARRAY COMMENT 'Field API names; NULL for every exportable field',
+  SOURCE_OBJECT        VARCHAR NOT NULL COMMENT 'The object to sync, e.g. a Salesforce object API name',
+  FIELDS               ARRAY COMMENT 'Field names; NULL for every exportable field',
   TARGET_DATABASE      VARCHAR NOT NULL,
   TARGET_SCHEMA        VARCHAR NOT NULL,
   TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name, uppercased; reserved words like ORDER are quoted',
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_RUNS (
   RUN_USER      VARCHAR,
   RUN_ROLE      VARCHAR,
   WATERMARK     VARCHAR,
-  SOQL          VARCHAR,
+  SOURCE_QUERY  VARCHAR,
   ROWS_EXPORTED NUMBER,
   ROWS_INSERTED NUMBER,
   ROWS_UPDATED  NUMBER,
@@ -60,14 +60,14 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_RUNS (
   MESSAGE       VARCHAR
 );
 
--- Captured Salesforce describe output; replaces the CLI's schema/ folder.
+-- Each object's captured fields (a Salesforce describe); replaces the CLI's schema/ folder.
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_FIELDS (
   CONNECTION_NAME VARCHAR NOT NULL,
-  SOBJECT         VARCHAR NOT NULL,
+  SOURCE_OBJECT   VARCHAR NOT NULL,
   POSITION        NUMBER,
   FIELD_NAME      VARCHAR NOT NULL,
   LABEL           VARCHAR,
-  SF_TYPE         VARCHAR,
+  SOURCE_TYPE     VARCHAR,
   LENGTH          NUMBER,
   PRECISION       NUMBER,
   SCALE           NUMBER,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_FIELDS (
   CAPTURED_AT     TIMESTAMP_LTZ
 );
 
--- Procedure code, and Bulk API exports waiting to be loaded
+-- Procedure code, and exports waiting to be loaded
 CREATE STAGE IF NOT EXISTS {{APP}}.GLACIER_CODE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
 CREATE STAGE IF NOT EXISTS {{APP}}.GLACIER_EXPORTS ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE');
 
@@ -91,7 +91,8 @@ CREATE OR REPLACE FILE FORMAT {{APP}}.GLACIER_CSV
   NULL_IF = ('', 'NULL')
   EMPTY_FIELD_AS_NULL = TRUE;
 
--- Every production org and sandbox. The admin's integration references this rule.
+-- One network rule per connector; each admin-created integration references its
+-- connector's rule. Salesforce: every production org and sandbox.
 CREATE NETWORK RULE IF NOT EXISTS {{APP}}.GLACIER_SALESFORCE_EGRESS
   MODE = EGRESS
   TYPE = HOST_PORT

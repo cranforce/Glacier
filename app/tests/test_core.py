@@ -8,6 +8,10 @@ sys.path.insert(0, SRC)
 
 import glacier_core as core  # noqa: E402
 
+# Salesforce's fields, as most of these tests' SQL expects
+KEYS = core.RecordKeys(key="Id", change="SystemModstamp", deleted="IsDeleted",
+                       untracked=("LastViewedDate", "LastReferencedDate"))
+
 
 class NamesTest(unittest.TestCase):
     def test_default_table_name_is_uppercased_object(self):
@@ -40,42 +44,15 @@ class NamesTest(unittest.TestCase):
         self.assertEqual(core.sql_string("a\\b"), "'a\\\\b'")
 
 
-class FieldsTest(unittest.TestCase):
-    def test_types(self):
-        cases = {
-            ("boolean", 0): "BOOLEAN", ("int", 0): "NUMBER(38,0)", ("currency", 2): "NUMBER(38,2)",
-            ("date", 0): "DATE", ("datetime", 0): "TIMESTAMP_NTZ", ("time", 0): "VARCHAR",
-            ("string", 0): "VARCHAR", ("reference", 0): "VARCHAR",
-        }
-        for (sf_type, scale), expected in cases.items():
-            self.assertEqual(core.snowflake_type({"type": sf_type, "scale": scale}), expected, sf_type)
-
-    def test_compound_fields_not_exportable(self):
-        self.assertFalse(core.exportable({"type": "address"}))
-        self.assertFalse(core.exportable({"type": "base64"}))
-        self.assertTrue(core.exportable({"type": "string"}))
-
+class ColumnsTest(unittest.TestCase):
     def test_normalize_header(self):
         self.assertEqual(core.normalize_header('"Id","SystemModstamp","Account.Name"\r\n'),
                          ["ID", "SYSTEMMODSTAMP", "ACCOUNT_NAME"])
 
-
-class SoqlTest(unittest.TestCase):
-    def test_adds_required_fields_once(self):
-        self.assertEqual(core.build_soql("Subscription__c", ["Status__c", "id"]),
-                         "SELECT SystemModstamp, Status__c, id FROM Subscription__c")
-
-    def test_delta_and_extras(self):
-        self.assertEqual(
-            core.build_soql("Order", ["Name"], "2026-10-01T12:00:00Z", ("IsDeleted",)),
-            "SELECT Id, SystemModstamp, IsDeleted, Name FROM Order "
-            "WHERE SystemModstamp >= 2026-10-01T12:00:00Z")
-
-    def test_rejects_bad_watermark_and_names(self):
-        with self.assertRaises(core.ConfigError):
-            core.build_soql("Order", ["Name"], "2026-10-01 12:00:00")
-        with self.assertRaises(core.ConfigError):
-            core.build_soql("Order", ["Name FROM User"])
+    def test_record_keys_columns(self):
+        self.assertEqual((KEYS.key_col, KEYS.change_col, KEYS.deleted_col), ("ID", "SYSTEMMODSTAMP", "ISDELETED"))
+        self.assertEqual(KEYS.untracked_cols, {"SYSTEMMODSTAMP", "LASTVIEWEDDATE", "LASTREFERENCEDDATE"})
+        self.assertIsNone(core.RecordKeys("id", "updated_at").deleted_col)
 
     def test_reconcile_due(self):
         now = datetime(2026, 10, 30, tzinfo=timezone.utc)
@@ -96,34 +73,34 @@ class LoadSqlTest(unittest.TestCase):
         self.assertTrue(sql.startswith("ALTER TABLE D.S.T ADD COLUMN"))
 
     def test_merge_flag_vs_remove(self):
-        flag = core.merge_sql("D.S.T", "D.S.T__DELTA", self.cols, "flag")
+        flag = core.merge_sql("D.S.T", "D.S.T__DELTA", self.cols, "flag", KEYS)
         self.assertNotIn("THEN DELETE", flag)
         self.assertNotIn("ID = s.ID,", flag)  # ID isn't updated
-        remove = core.merge_sql("D.S.T", "D.S.T__DELTA", self.cols, "remove")
+        remove = core.merge_sql("D.S.T", "D.S.T__DELTA", self.cols, "remove", KEYS)
         self.assertIn("WHEN MATCHED AND COALESCE(s.ISDELETED::BOOLEAN, FALSE) THEN DELETE", remove)
         self.assertIn("WHEN NOT MATCHED AND NOT COALESCE", remove)
 
     def test_delta_table_has_only_exported_columns(self):
-        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag")
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag", KEYS)
         self.assertEqual(stmts[1], "CREATE OR REPLACE TEMPORARY TABLE D.S.T__DELTA (\n  ID VARCHAR,\n  "
                                    "SYSTEMMODSTAMP TIMESTAMP_NTZ,\n  ISDELETED BOOLEAN,\n  NAME VARCHAR\n)")
         self.assertNotIn("LIKE", stmts[1])
 
     def test_full_load_without_rows_only_creates(self):
-        self.assertEqual(len(core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", False)), 1)
-        both = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True)
+        self.assertEqual(len(core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", False, KEYS)), 1)
+        both = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True, KEYS)
         self.assertTrue(both[0].startswith("CREATE OR REPLACE TABLE D.S.T"))
         self.assertTrue(both[1].startswith("COPY INTO D.S.T"))
 
     def test_reconcile_modes(self):
-        remove = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "remove")
+        remove = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "remove", KEYS)
         self.assertIn("DELETE FROM D.S.T WHERE ID NOT IN", remove[-1])
-        flag = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "flag")
+        flag = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "flag", KEYS)
         self.assertIn("UPDATE D.S.T SET ISDELETED = TRUE", flag[-1])
 
     def test_delta_with_history(self):
         stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "remove",
-                                      "D.S.T__HISTORY")
+                                      KEYS, "D.S.T__HISTORY")
         self.assertTrue(stmts[1].startswith("CREATE TABLE IF NOT EXISTS D.S.T__HISTORY"))
         self.assertIn("VALID_FROM TIMESTAMP_NTZ", stmts[1])
         self.assertTrue(stmts[2].startswith("ALTER TABLE D.S.T__HISTORY ADD COLUMN"))
@@ -138,17 +115,17 @@ class LoadSqlTest(unittest.TestCase):
         self.assertIn("QUALIFY ROW_NUMBER()", close)
 
     def test_delta_without_history_unchanged(self):
-        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag")
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols, self.types, "@x/", "F", "flag", KEYS)
         self.assertEqual(len(stmts), 4)
         self.assertNotIn("BEGIN", stmts)
 
     def test_history_rejects_clashing_columns(self):
         with self.assertRaisesRegex(core.ConfigError, "IS_CURRENT"):
             core.delta_statements("D.S.T", "D.S.T__DELTA", self.cols + ["IS_CURRENT"], self.types, "@x/",
-                                  "F", "flag", "D.S.T__HISTORY")
+                                  "F", "flag", KEYS, "D.S.T__HISTORY")
 
     def test_full_load_with_history(self):
-        stmts = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True, "D.S.T__HISTORY")
+        stmts = core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", True, KEYS, "D.S.T__HISTORY")
         self.assertTrue(stmts[1].startswith("COPY INTO D.S.T"))
         self.assertEqual(stmts[-1], "COMMIT")
         self.assertTrue(stmts[-2].startswith("INSERT INTO D.S.T__HISTORY"))
@@ -156,29 +133,53 @@ class LoadSqlTest(unittest.TestCase):
         self.assertIn("FROM (SELECT * FROM D.S.T) s", stmts[-2])
         # An empty load doesn't close every record
         self.assertEqual(len(core.full_load_statements("D.S.T", self.cols, self.types, "@x/", "F", False,
-                                                       "D.S.T__HISTORY")), 1)
+                                                       KEYS, "D.S.T__HISTORY")), 1)
 
     def test_reconcile_with_history(self):
-        stmts = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "remove", "D.S.T__HISTORY")
+        stmts = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "remove", KEYS, "D.S.T__HISTORY")
         self.assertEqual(stmts[-1], "COMMIT")
         self.assertTrue(stmts[-2].startswith("DELETE FROM D.S.T WHERE"))
         self.assertIn("UPDATE D.S.T__HISTORY SET VALID_TO = CONVERT_TIMEZONE", stmts[-3])
         self.assertTrue(stmts[-5].startswith("CREATE TABLE IF NOT EXISTS D.S.T__HISTORY"))
 
+    def test_other_sources_keys(self):
+        """A source with its own key and change fields, and no deleted flag."""
+        keys = core.RecordKeys(key="id", change="updated_at")
+        cols = ["ID", "UPDATED_AT", "STATUS"]
+        merge = core.merge_sql("D.S.T", "D.S.T__DELTA", cols, "off", keys)
+        self.assertIn("PARTITION BY ID ORDER BY UPDATED_AT DESC", merge)
+        self.assertNotIn("SYSTEMMODSTAMP", merge)
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", cols, {"UPDATED_AT": "TIMESTAMP_NTZ"}, "@x/",
+                                      "F", "off", keys, "D.S.T__HISTORY")
+        close = stmts[stmts.index("BEGIN") + 1]
+        self.assertIn("SET VALID_TO = s.UPDATED_AT", close)
+        self.assertIn("HASH(h.ID, h.STATUS) <> HASH(s.ID, s.STATUS)", close)
+        self.assertIn("VALID_FROM TIMESTAMP_NTZ", stmts[1])
+        self.assertIn("MAX(UPDATED_AT)", core.watermark_sql("T", "TIMESTAMP_NTZ", keys))
+
     def test_watermark_by_type(self):
-        self.assertIn("TO_VARCHAR(MAX(SYSTEMMODSTAMP)", core.watermark_sql("T", "TIMESTAMP_NTZ"))
-        self.assertIn("CONVERT_TIMEZONE('UTC', MAX(SYSTEMMODSTAMP))", core.watermark_sql("T", "TIMESTAMP_TZ"))
-        self.assertIn("TRY_TO_TIMESTAMP_TZ", core.watermark_sql("T", "TEXT"))
+        self.assertIn("TO_VARCHAR(MAX(SYSTEMMODSTAMP)", core.watermark_sql("T", "TIMESTAMP_NTZ", KEYS))
+        self.assertIn("CONVERT_TIMEZONE('UTC', MAX(SYSTEMMODSTAMP))", core.watermark_sql("T", "TIMESTAMP_TZ", KEYS))
+        self.assertIn("TRY_TO_TIMESTAMP_TZ", core.watermark_sql("T", "TEXT", KEYS))
 
 
 class DdlTest(unittest.TestCase):
     def test_secret_procedures(self):
-        ddl = core.secret_procedure_ddl("DB.SC", "EAI", [("ODBM_PROD", "DB.SC.SEC1"), ("EU", "DB.SC.SEC2")])
+        ddl = core.secret_procedure_ddl("DB.SC", "salesforce", "EAI",
+                                        [("ODBM_PROD", "DB.SC.SEC1"), ("EU", "DB.SC.SEC2")])
         self.assertEqual(len(ddl), len(core.SECRET_PROCEDURES))
+        self.assertIn("PROCEDURE DB.SC.GLACIER_SALESFORCE_TEST_CONNECTION(", ddl[0])
+        self.assertIn("PROCEDURE DB.SC.GLACIER_SALESFORCE_EXTRACT(", ddl[-1])
         self.assertIn("SECRETS = ('odbm_prod' = DB.SC.SEC1, 'eu' = DB.SC.SEC2)", ddl[0])
         self.assertIn("EXTERNAL_ACCESS_INTEGRATIONS = (EAI)", ddl[0])
-        self.assertIn("APP_SCHEMA VARCHAR DEFAULT 'DB.SC'", ddl[0])
-        self.assertNotIn("SECRETS", core.secret_procedure_ddl("DB.SC", "EAI", [])[0])
+        self.assertIn("CONNECTOR VARCHAR DEFAULT 'salesforce', APP_SCHEMA VARCHAR DEFAULT 'DB.SC'", ddl[0])
+        self.assertNotIn("SECRETS", core.secret_procedure_ddl("DB.SC", "salesforce", "EAI", [])[0])
+
+    def test_connector_names(self):
+        self.assertEqual(core.procedure_name("shiphero", "DESCRIBE"), "GLACIER_SHIPHERO_DESCRIBE")
+        self.assertEqual(core.integration_name("salesforce"), "GLACIER_SALESFORCE_EAI")
+        with self.assertRaises(core.ConfigError):
+            core.procedure_name("x; DROP", "EXTRACT")
 
     def test_code_files_match_src(self):
         self.assertEqual(sorted(core.CODE_FILES),

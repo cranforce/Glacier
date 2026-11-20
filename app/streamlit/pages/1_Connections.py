@@ -1,14 +1,14 @@
-"""Add, edit, test, and remove Salesforce connections."""
+"""Add, edit, test, and remove connections to source systems."""
 import streamlit as st
 
 import glacier_forms as forms
 import glacier_ui as ui
-from glacier_ui import core
+from glacier_ui import connectors, core
 
 st.set_page_config(page_title="Connections · Glacier", layout="wide")
 st.title("Connections")
-st.caption("One per Salesforce org, logging in with the JWT bearer flow. "
-           "See docs/snowflake-setup.md for the key pair and External Client App.")
+st.caption("One per source system account, such as a Salesforce org. "
+           "See docs/snowflake-setup.md for each connector's credentials.")
 
 ui.show_flash()
 app = ui.app()
@@ -17,8 +17,8 @@ by_name = {c["CONNECTION_NAME"]: c for c in connections}
 
 if connections:
     st.dataframe(
-        [{k: c[k] for k in ("CONNECTION_NAME", "MY_DOMAIN_URL", "USERNAME", "API_VERSION",
-                            "SECRET_NAME", "DESCRIPTION")} for c in connections],
+        [{"CONNECTION_NAME": c["CONNECTION_NAME"], "CONNECTOR": c["CONNECTOR"], **c["SETTINGS"],
+          "SECRET_NAME": c["SECRET_NAME"], "DESCRIPTION": c["DESCRIPTION"]} for c in connections],
         width="stretch", hide_index=True)
 else:
     st.info("No connections yet.")
@@ -31,35 +31,39 @@ choice = st.selectbox("Connection", [NEW, *by_name], key="conn_choice")
 current = by_name.get(choice, {})
 is_new = choice == NEW
 
-with st.form(f"connection:{choice}"):
+kinds = list(connectors.CONNECTORS)
+kind = st.selectbox("Connector", kinds, disabled=not is_new, key=f"connector:{choice}",
+                    index=kinds.index(current["CONNECTOR"]) if current else 0,
+                    format_func=lambda k: connectors.get(k).LABEL)
+source = connectors.get(kind)
+settings = current.get("SETTINGS", {})
+
+with st.form(f"connection:{choice}:{kind}"):
     name = st.text_input("Name", value=current.get("CONNECTION_NAME", ""), disabled=not is_new,
                          help="Letters, digits, and _. Jobs refer to it.")
-    url = st.text_input("My Domain URL", value=current.get("MY_DOMAIN_URL", ""),
-                        placeholder="https://<domain>.my.salesforce.com")
-    client_id = st.text_input("Consumer key", value=current.get("CLIENT_ID") or "")
-    username = st.text_input("Integration user", value=current.get("USERNAME") or "")
-    api_version = st.text_input("API version", value=current.get("API_VERSION") or "64.0")
+    values = {s.key: st.text_input(s.label, value=settings.get(s.key) or s.default,
+                                   placeholder=s.placeholder, help=s.help)
+              for s in source.SETTINGS}
     description = st.text_input("Description", value=current.get("DESCRIPTION") or "")
-    private_key = st.text_area(
-        "Private key (PEM)",
+    secret = st.text_area(
+        source.SECRET_LABEL,
         help="Snowflake masks secret values in query history." +
-             ("" if is_new else " Leave blank to keep the current key."),
-        placeholder="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----")
+             ("" if is_new else " Leave blank to keep the current one."),
+        placeholder=source.SECRET_PLACEHOLDER)
     submitted = st.form_submit_button("Save connection", type="primary")
 
 if submitted:
     try:
         conn = forms.validate_connection({
-            "CONNECTION_NAME": name if is_new else choice, "MY_DOMAIN_URL": url,
-            "CLIENT_ID": client_id, "USERNAME": username, "API_VERSION": api_version,
+            "CONNECTION_NAME": name if is_new else choice, "CONNECTOR": kind, "SETTINGS": values,
             "DESCRIPTION": description, "SECRET_NAME": current.get("SECRET_NAME")}, app)
         if is_new and conn["CONNECTION_NAME"] in by_name:
             raise core.ConfigError(f"A connection named {conn['CONNECTION_NAME']} already exists")
-        if is_new and not private_key.strip():
-            raise core.ConfigError("A new connection needs its private key")
+        if is_new and not secret.strip():
+            raise core.ConfigError(f"A new connection needs its {source.SECRET_LABEL.lower()}")
         with st.spinner("Saving..."):
-            if private_key.strip():
-                ui.session().sql(forms.create_secret_sql(conn["SECRET_NAME"], private_key)).collect()
+            if secret.strip():
+                ui.session().sql(forms.create_secret_sql(conn["SECRET_NAME"], secret, kind)).collect()
             ui.session().sql(forms.save_connection_sql(app),
                              params=forms.row_param(conn)).collect()
             # A procedure's secrets are fixed when it's created
@@ -80,8 +84,8 @@ if connections:
     test_name = st.selectbox("Connection to test", list(by_name), key="conn_test")
     if st.button("Test connection"):
         try:
-            with st.spinner("Logging in to Salesforce..."):
-                st.json(ui.call("GLACIER_TEST_CONNECTION", test_name))
+            with st.spinner(f"Logging in to {ui.connector(test_name).LABEL}..."):
+                st.json(ui.call_connector(test_name, "TEST_CONNECTION"))
         except Exception as e:
             ui.show_error(e)
 

@@ -9,7 +9,7 @@ Glacier started as Snowforce, a Salesforce-to-Snowflake sync. It is becoming a g
 sync enterprise systems into Snowflake. Salesforce is the first source and ShipHero the next,
 each a *connector* behind the same jobs, runs, scheduling, delete handling, and history.
 
-Status: phase 1 is done in the repo. Nothing has been deployed to the new home yet.
+Status: phases 1 and 2 are done in the repo. Nothing has been deployed to the new home yet.
 
 1. TOC
 {:toc}
@@ -19,8 +19,8 @@ Status: phase 1 is done in the repo. Nothing has been deployed to the new home y
 | Phase | What | Where | Status |
 | --- | --- | --- | --- |
 | 1 | Rename to Glacier; give it its own database, schema, role, and warehouse | Repo | Done |
-| 2 | Connector abstraction, with Salesforce as the first connector and no change in behaviour | Repo | Next |
-| 3 | Stand up `GLACIER_DB.APP` in Snowflake, move the connections and jobs, and cut over | Snowflake | After 2 |
+| 2 | Connector abstraction, with Salesforce as the first connector and no change in behaviour | Repo | Done |
+| 3 | Stand up `GLACIER_DB.APP` in Snowflake, move the connections and jobs, and cut over | Snowflake | Next |
 | 4 | ShipHero connector | Repo, then Snowflake | After 3 |
 
 Phase 2 comes before phase 3 on purpose: the new tables are then created in their final shape,
@@ -48,22 +48,23 @@ Still to do outside the repo:
 - **`GLACIER_WH` doesn't exist yet.** The local CLI (`project.env`, `bin/sf_to_snowflake.sh`)
   and the ad hoc SQL now default to it. Until it's created, run the CLI with
   `SNOW_WAREHOUSE=SNOWFORCE_WH ./run.sh`.
-- **The GitHub repository is still `cranforce/Snowforce`.** The docs site links to that name.
-  Rename it in GitHub (it redirects the old URL), then update `docs/_config.yml` and
-  `docs/local-setup.md`.
 - **The engine deployed in `CRM_DB.CMILLER_SF_PLAYGROUND` still uses the `SNOWFORCE_` names.**
   Leave it running until the cutover in phase 3. Don't run `app/deploy.sh` against the
   playground from this branch, because it would create a second set of `GLACIER_` objects next to it.
 
-## Phase 2: connectors
+## Phase 2: connectors (done)
 
-Today the engine assumes Salesforce throughout: SOQL, the Bulk API, `Id` and `SystemModstamp`,
-the recycle bin, and Salesforce field types. Phase 2 splits it in two:
+The engine assumed Salesforce throughout: SOQL, the Bulk API, `Id` and `SystemModstamp`, the
+recycle bin, and Salesforce field types. It's now split in two:
 
 - **The core** (`glacier_core.py`, `glacier_procs.py`) keeps everything that is about Snowflake:
   jobs and runs, tasks, staging, `COPY`, `MERGE`, deletes, reconcile, and type 2 history.
 - **Each connector** (`connector_salesforce.py`, later `connector_shiphero.py`) says how to log
   in, list objects, describe their fields, and export changed records to the stage.
+  `glacier_connectors.py` lists them and documents what a connector provides.
+
+For Salesforce, the generated load SQL is identical to before; it was compared statement by
+statement against phase 1's for every delete mode, with and without history.
 
 ### What a connector provides
 
@@ -74,60 +75,67 @@ the recycle bin, and Salesforce field types. Phase 2 splits it in two:
 | Hosts for the network rule | `login`/`test.salesforce.com`, `*.my.salesforce.com`, `*.sandbox.my.salesforce.com` | `public-api.shiphero.com` |
 | Objects | Every queryable sObject | A fixed list Glacier supports, e.g. orders, products, shipments |
 | Fields and types | `describe` | Defined in the connector, per object |
-| Key column | `ID` | `ID` |
-| Change column (watermark) | `SYSTEMMODSTAMP` | `UPDATED_AT`, where the query supports `updated_from` |
-| Deletes | Recycle bin (`IsDeleted`), and a reconcile of every `Id` | Unknown; possibly reconcile only, or none |
-| Export | Bulk API 2.0 CSV pages | GraphQL pages, cursor paginated, within its credit limit |
+| Key field | `Id` | `id` |
+| Change field (watermark) | `SystemModstamp` | `updated_at`, where the query supports `updated_from` |
+| Deleted flag | `IsDeleted` (recycle bin), plus a reconcile of every `Id` | Unknown; possibly reconcile only, or none |
+| Export | Bulk API 2.0 CSV pages | GraphQL pages, cursor paginated within its credit limit, written as CSV |
 
-The core uses the key and change columns where it now hard-codes `ID` and `SYSTEMMODSTAMP`.
-It offers only the delete modes a connector supports.
+The key, change, and deleted fields are the connector's `KEYS`, which the core's load and history
+SQL use in place of the `ID`, `SYSTEMMODSTAMP`, and `ISDELETED` it used to hard-code. A connector
+offers only the delete modes it supports.
 
 ### Table changes
 
 | Table | Change |
 | --- | --- |
-| `GLACIER_CONNECTIONS` | Add `CONNECTOR` (`salesforce`, `shiphero`). Move `MY_DOMAIN_URL`, `CLIENT_ID`, `USERNAME`, and `API_VERSION` into a `SETTINGS` variant, which each connector validates |
-| `GLACIER_JOBS` | `SOBJECT` becomes `SOURCE_OBJECT` |
-| `GLACIER_FIELDS` | `SF_TYPE` becomes `SOURCE_TYPE` |
-| `GLACIER_RUNS` | `SOQL` becomes `SOURCE_QUERY` |
+| `GLACIER_CONNECTIONS` | Added `CONNECTOR` (`salesforce`). `MY_DOMAIN_URL`, `CLIENT_ID`, `USERNAME`, and `API_VERSION` moved into a `SETTINGS` object, which each connector validates |
+| `GLACIER_JOBS` | `SOBJECT` became `SOURCE_OBJECT` |
+| `GLACIER_FIELDS` | `SOBJECT` became `SOURCE_OBJECT`, and `SF_TYPE` became `SOURCE_TYPE` |
+| `GLACIER_RUNS` | `SOQL` became `SOURCE_QUERY` |
 
 ### Procedures and integrations
 
-Each connector gets its own owner's-rights procedures, its own network rule, and its own external
-access integration. Examples are `GLACIER_SALESFORCE_EXTRACT` with `GLACIER_SALESFORCE_EAI`, and
-`GLACIER_SHIPHERO_EXTRACT` with `GLACIER_SHIPHERO_EAI`. Each one holds only its own connections'
-secrets and can reach only its own hosts. `GLACIER_REFRESH_CONNECTIONS` re-creates every connector's
-procedures. A connector whose integration doesn't exist yet is skipped. `GLACIER_RUN_JOB` stays
-a single caller's-rights procedure that calls the right connector's extract.
+Each connector has its own owner's-rights procedures, `GLACIER_<CONNECTOR>_TEST_CONNECTION`,
+`_LIST_OBJECTS`, `_DESCRIBE`, and `_EXTRACT`; its own network rule, `GLACIER_<CONNECTOR>_EGRESS`; and
+its own external access integration, `GLACIER_<CONNECTOR>_EAI`. Each procedure set holds only its
+own connections' secrets and can reach only its own hosts. `GLACIER_REFRESH_CONNECTIONS` re-creates
+every connector's procedures and skips a connector whose integration doesn't exist yet.
+`GLACIER_RUN_JOB` stays a single caller's-rights procedure that calls the job's connector's
+extract.
 
-`app.env` gets one integration setting per connector in place of `APP_INTEGRATION`. Each
-connector's integration is a separate one-time admin step.
+The integration name follows the convention, so `app.env` no longer has `APP_INTEGRATION`. Each
+connector's integration is a separate one-time admin step:
+`app/deploy.sh admin-sql integration <connector>`.
+
+A job's run-as role now also needs `SELECT` on `GLACIER_CONNECTIONS`, to find the job's connector.
 
 ### Streamlit
 
 - **Connections:** choose the connector first. The rest of the form comes from that connector's
   settings.
-- **Jobs:** choose objects and fields from whatever the connector's list and describe return.
-  Delete modes are limited to what the connector supports.
+- **Jobs:** objects and fields come from whatever the connector's list and describe return, and
+  the labels, placeholders, and delete modes come from the connector.
 
-### Done when
+### Migration
 
-The unit tests pass, with the Salesforce tests moved to the connector. The rendered deploy SQL
-creates the same Salesforce behaviour as before.
+`app/sql/90_migrate_from_snowforce.sql` (`app/deploy.sh migrate-sql`) copies the playground's
+connections, jobs, and captured fields into the new tables for phase 3. Connections become
+`salesforce` connections with their columns in `SETTINGS`; jobs move to
+`GLACIER_DB.NPC_SALESFORCE_PROD_RAW` and `GLACIER_WH`.
 
 ## Phase 3: stand up Glacier in Snowflake
 
 1. Admin: `app/deploy.sh admin-sql setup`, and grant `GLACIER_APP_ROLE` to whoever administers
    the app.
 2. `app/deploy.sh`.
-3. Admin: `app/deploy.sh admin-sql integration`, plus the grants to write the destination schemas
-   and the grants for each run-as user.
-4. Copy the connections and jobs from `CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_*` into the new
-   tables, mapped to the phase 2 columns. Do this with a migration script added in phase 2.
-   Re-enter each connection's private key, call `GLACIER_REFRESH_CONNECTIONS()`, then call
-   `GLACIER_SAVE_JOB_TASK` for each job.
-5. Point each job at `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`. The tables there are new, so each job's
-   first run is a full load. Once the new tables match the old ones, suspend the old
+3. Admin: `app/deploy.sh admin-sql integration salesforce`, plus the grants for each run-as
+   user.
+4. Copy the connections, jobs, and captured fields from `CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_*`
+   with the output of `app/deploy.sh migrate-sql` (the app role needs `SELECT` on the old tables).
+   Re-enter each connection's private key on the Connections page, then save each job to create
+   its task.
+5. The migrated jobs load `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`. The tables there are new, so each
+   job's first run is a full load. Once the new tables match the old ones, suspend the old
    `SNOWFORCE_JOB_*` tasks.
 6. When the new jobs have run cleanly for a while, drop the old `SNOWFORCE_*` objects in the
    playground, and `SNOWFORCE_WH` if nothing else uses it. Then decide what to do with the

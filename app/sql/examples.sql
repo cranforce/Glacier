@@ -19,29 +19,31 @@ CREATE OR REPLACE SECRET GLACIER_SECRET_ODBM_PROD
 ...
 -----END PRIVATE KEY-----';
 
-INSERT INTO GLACIER_CONNECTIONS
-  (CONNECTION_NAME, MY_DOMAIN_URL, CLIENT_ID, USERNAME, SECRET_NAME, DESCRIPTION)
-VALUES ('ODBM_PROD', 'https://ourdailybreadministries.my.salesforce.com',
-        '<consumer key>', '<integration user username>',
-        'GLACIER_DB.APP.GLACIER_SECRET_ODBM_PROD', 'Production org');
+INSERT INTO GLACIER_CONNECTIONS (CONNECTION_NAME, CONNECTOR, SETTINGS, SECRET_NAME, DESCRIPTION)
+SELECT 'ODBM_PROD', 'salesforce',
+       OBJECT_CONSTRUCT('MY_DOMAIN_URL', 'https://ourdailybreadministries.my.salesforce.com',
+                        'CLIENT_ID', '<consumer key>',
+                        'USERNAME', '<integration user username>',
+                        'API_VERSION', '64.0'),
+       'GLACIER_DB.APP.GLACIER_SECRET_ODBM_PROD', 'Production org';
 
--- Re-create the Salesforce procedures so they can read the new secret
+-- Re-create the connector's procedures so they can read the new secret
 CALL GLACIER_REFRESH_CONNECTIONS();
-CALL GLACIER_TEST_CONNECTION('ODBM_PROD');
+CALL GLACIER_SALESFORCE_TEST_CONNECTION('ODBM_PROD');
 
 -- 2. Look around ------------------------------------------------------------------
-CALL GLACIER_LIST_OBJECTS('ODBM_PROD');
-CALL GLACIER_DESCRIBE('ODBM_PROD', 'Subscription__c');
-SELECT FIELD_NAME, SF_TYPE, SNOWFLAKE_TYPE, EXPORTABLE
+CALL GLACIER_SALESFORCE_LIST_OBJECTS('ODBM_PROD');
+CALL GLACIER_SALESFORCE_DESCRIBE('ODBM_PROD', 'Subscription__c');
+SELECT FIELD_NAME, SOURCE_TYPE, SNOWFLAKE_TYPE, EXPORTABLE
 FROM GLACIER_FIELDS
-WHERE CONNECTION_NAME = 'ODBM_PROD' AND SOBJECT = 'Subscription__c'
+WHERE CONNECTION_NAME = 'ODBM_PROD' AND SOURCE_OBJECT = 'Subscription__c'
 ORDER BY POSITION;
 
 -- 3. Add a job --------------------------------------------------------------------
 -- FIELDS NULL means every exportable field. TARGET_TABLE NULL means the object
 -- name (SUBSCRIPTION__C here); set it to keep loading an existing table.
 INSERT INTO GLACIER_JOBS
-  (JOB_NAME, CONNECTION_NAME, SOBJECT, FIELDS, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
+  (JOB_NAME, CONNECTION_NAME, SOURCE_OBJECT, FIELDS, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
    DELETE_MODE, WAREHOUSE, SCHEDULE)
 SELECT 'SUBSCRIPTION', 'ODBM_PROD', 'Subscription__c',
        ARRAY_CONSTRUCT('Account__c', 'Status__c', 'Start_Date__c', 'End_Date__c'),

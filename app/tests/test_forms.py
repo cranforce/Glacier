@@ -15,7 +15,7 @@ ROLE = "APP_ROLE"
 
 
 def job(**overrides):
-    values = {"JOB_NAME": "subscription", "CONNECTION_NAME": "odbm_prod", "SOBJECT": "Subscription__c",
+    values = {"JOB_NAME": "subscription", "CONNECTION_NAME": "odbm_prod", "SOURCE_OBJECT": "Subscription__c",
               "FIELDS": None, "TARGET_DATABASE": "crm_db", "TARGET_SCHEMA": "s", "TARGET_TABLE": "",
               "DELETE_MODE": "flag", "RECONCILE_AFTER_DAYS": 14, "TRACK_HISTORY": False,
               "RUN_AS_USER": "", "RUN_AS_ROLE": "", "WAREHOUSE": "glacier_wh",
@@ -26,7 +26,7 @@ def job(**overrides):
 
 class JobTest(unittest.TestCase):
     def test_normalizes_names_and_blanks(self):
-        saved = forms.validate_job(job(), APP, ROLE)
+        saved = forms.validate_job(job(), APP, ROLE, "salesforce")
         self.assertEqual(saved["JOB_NAME"], "SUBSCRIPTION")
         self.assertEqual(saved["CONNECTION_NAME"], "ODBM_PROD")
         self.assertEqual(saved["TARGET_DATABASE"], "CRM_DB")
@@ -36,66 +36,64 @@ class JobTest(unittest.TestCase):
         self.assertEqual(forms.target_table(saved), "CRM_DB.S.SUBSCRIPTION__C")
 
     def test_manual_schedule_is_null(self):
-        self.assertIsNone(forms.validate_job(job(SCHEDULE=""), APP, ROLE)["SCHEDULE"])
+        self.assertIsNone(forms.validate_job(job(SCHEDULE=""), APP, ROLE, "salesforce")["SCHEDULE"])
 
     def test_reserved_table_is_quoted_in_target(self):
-        saved = forms.validate_job(job(SOBJECT="Order"), APP, ROLE)
+        saved = forms.validate_job(job(SOURCE_OBJECT="Order"), APP, ROLE, "salesforce")
         self.assertEqual(forms.target_table(saved), 'CRM_DB.S."ORDER"')
 
     def test_rejects_bad_values(self):
-        for bad in (dict(JOB_NAME="has space"), dict(SOBJECT="Bad;Object"), dict(FIELDS=[]),
+        for bad in (dict(JOB_NAME="has space"), dict(SOURCE_OBJECT="Bad;Object"), dict(FIELDS=[]),
                     dict(FIELDS=["Name", "x y"]), dict(DELETE_MODE="purge"),
                     dict(RECONCILE_AFTER_DAYS=0), dict(WAREHOUSE=""), dict(TARGET_TABLE='T"; DROP'),
                     dict(SCHEDULE="0 * * * * UTC; DROP"), dict(RUN_AS_USER='x"; DROP')):
             with self.subTest(bad=bad), self.assertRaises(core.ConfigError):
-                forms.validate_job(job(**bad), APP, ROLE)
+                forms.validate_job(job(**bad), APP, ROLE, "salesforce")
 
     def test_run_as_role_needs_user_unless_app_role(self):
         with self.assertRaises(core.ConfigError):
-            forms.validate_job(job(RUN_AS_ROLE="other_role"), APP, ROLE)
-        self.assertEqual(forms.validate_job(job(RUN_AS_ROLE="app_role"), APP, ROLE)["RUN_AS_ROLE"], ROLE)
-        saved = forms.validate_job(job(RUN_AS_ROLE="other_role", RUN_AS_USER="svc.user@odbm.org"), APP, ROLE)
+            forms.validate_job(job(RUN_AS_ROLE="other_role"), APP, ROLE, "salesforce")
+        self.assertEqual(forms.validate_job(job(RUN_AS_ROLE="app_role"), APP, ROLE, "salesforce")["RUN_AS_ROLE"], ROLE)
+        saved = forms.validate_job(job(RUN_AS_ROLE="other_role", RUN_AS_USER="svc.user@odbm.org"), APP, ROLE, "salesforce")
         self.assertEqual(saved["RUN_AS_USER"], "SVC.USER@ODBM.ORG")
 
     def test_presets_are_valid_schedules(self):
         for schedule in forms.SCHEDULES.values():
-            forms.validate_job(job(SCHEDULE=schedule), APP, ROLE)
+            forms.validate_job(job(SCHEDULE=schedule), APP, ROLE, "salesforce")
 
 
 class ConnectionTest(unittest.TestCase):
-    def connection(self, **overrides):
-        values = {"CONNECTION_NAME": "odbm_prod", "MY_DOMAIN_URL": "https://odbm.my.salesforce.com/",
-                  "CLIENT_ID": "key", "USERNAME": "int@odbm.org", "API_VERSION": "", "DESCRIPTION": " "}
+    def connection(self, settings=None, **overrides):
+        values = {"CONNECTION_NAME": "odbm_prod", "CONNECTOR": "salesforce", "DESCRIPTION": " ",
+                  "SETTINGS": {"MY_DOMAIN_URL": "https://odbm.my.salesforce.com/", "CLIENT_ID": "key",
+                               "USERNAME": "int@odbm.org", "API_VERSION": "", **(settings or {})}}
         values.update(overrides)
         return forms.validate_connection(values, APP)
 
     def test_defaults(self):
         conn = self.connection()
         self.assertEqual(conn["CONNECTION_NAME"], "ODBM_PROD")
-        self.assertEqual(conn["MY_DOMAIN_URL"], "https://odbm.my.salesforce.com")
-        self.assertEqual(conn["API_VERSION"], "64.0")
+        self.assertEqual(conn["CONNECTOR"], "salesforce")
+        self.assertEqual(conn["SETTINGS"]["MY_DOMAIN_URL"], "https://odbm.my.salesforce.com")
+        self.assertEqual(conn["SETTINGS"]["API_VERSION"], "64.0")
         self.assertEqual(conn["SECRET_NAME"], "CRM_DB.APP.GLACIER_SECRET_ODBM_PROD")
         self.assertIsNone(conn["DESCRIPTION"])
 
     def test_keeps_existing_secret_name(self):
         self.assertEqual(self.connection(SECRET_NAME="DB.S.OLD")["SECRET_NAME"], "DB.S.OLD")
 
-    def test_sandbox_url(self):
-        self.connection(MY_DOMAIN_URL="https://odbm--dev.sandbox.my.salesforce.com")
-
     def test_rejects_bad_values(self):
-        for bad in (dict(MY_DOMAIN_URL="https://evil.example.com"), dict(MY_DOMAIN_URL="http://odbm.my.salesforce.com"),
-                    dict(CLIENT_ID=""), dict(USERNAME=None), dict(API_VERSION="64"),
-                    dict(CONNECTION_NAME="a-b")):
+        for bad in (dict(CONNECTION_NAME="a-b"), dict(CONNECTOR="nope"), dict(CONNECTOR=None),
+                    dict(settings={"CLIENT_ID": ""})):
             with self.subTest(bad=bad), self.assertRaises(core.ConfigError):
                 self.connection(**bad)
 
     def test_secret_sql_escapes_and_checks_key(self):
         pem = "-----BEGIN PRIVATE KEY-----\nab'c\n-----END PRIVATE KEY-----\n"
-        sql = forms.create_secret_sql("DB.S.SEC", pem)
+        sql = forms.create_secret_sql("DB.S.SEC", pem, "salesforce")
         self.assertIn("SECRET_STRING = '-----BEGIN PRIVATE KEY-----\nab''c\n-----END PRIVATE KEY-----'", sql)
         with self.assertRaises(core.ConfigError):
-            forms.create_secret_sql("DB.S.SEC", "not a key")
+            forms.create_secret_sql("DB.S.SEC", "not a key", "salesforce")
 
 
 class MergeTest(unittest.TestCase):
@@ -109,8 +107,13 @@ class MergeTest(unittest.TestCase):
         self.assertNotIn("NEXT_RUN_MODE", sql)                       # left for the run to clear
         self.assertEqual(sql.count("?"), 1)
 
+    def test_connection_merge_casts_settings(self):
+        sql = forms.save_connection_sql(APP)
+        self.assertIn("SETTINGS = s.v:SETTINGS::OBJECT", sql)
+        self.assertIn("CONNECTOR = s.v:CONNECTOR::VARCHAR", sql)
+
     def test_row_param_keeps_nulls(self):
-        saved = forms.validate_job(job(), APP, ROLE)
+        saved = forms.validate_job(job(), APP, ROLE, "salesforce")
         self.assertIsNone(json.loads(forms.row_param(saved)[0])["TARGET_TABLE"])
 
 

@@ -65,8 +65,8 @@ failed = [r for r in history if r["STATUS"] == "FAILED"]
 if failed:
     with st.expander(f"Latest failure: {failed[0]['JOB_NAME']} at {failed[0]['STARTED_AT']}"):
         st.code(failed[0]["MESSAGE"] or "(no message)", language=None)
-        if failed[0]["SOQL"]:
-            st.code(failed[0]["SOQL"], language="sql")
+        if failed[0]["SOURCE_QUERY"]:
+            st.code(failed[0]["SOURCE_QUERY"], language="sql")
 
 st.caption("A scheduled run that never appears here failed before it started, e.g. a missing grant. "
            "Check the task's history; see docs/jobs.md.")
