@@ -5,7 +5,9 @@
 #   app/deploy.sh                        Create or update the app (one Snowflake session)
 #   app/deploy.sh streamlit              Update only the Streamlit app
 #   app/deploy.sh admin-sql setup        One-time admin SQL, before the first deploy
-#   app/deploy.sh admin-sql integration  One-time admin SQL, after the first deploy
+#   app/deploy.sh admin-sql integration <connector>
+#                                        One-time admin SQL per connector, after the first deploy
+#   app/deploy.sh migrate-sql            SQL to copy connections and jobs from the Snowforce schema
 #   app/deploy.sh render                 Print the deploy SQL without running it
 #
 # Settings are in app/app.env.
@@ -23,7 +25,6 @@ render() {
       -e "s|{{APP_DB}}|$APP_DB|g" \
       -e "s|{{APP_ROLE}}|$APP_ROLE|g" \
       -e "s|{{APP_WAREHOUSE}}|$APP_WAREHOUSE|g" \
-      -e "s|{{APP_INTEGRATION}}|$APP_INTEGRATION|g" \
       -e "s|{{IMPORTS}}|$imports|g" "$@"
 }
 
@@ -46,7 +47,7 @@ streamlit_sql() {
   echo "-- Streamlit app"
   echo "USE ROLE $APP_ROLE;"
   echo "USE WAREHOUSE $APP_WAREHOUSE;"
-  for f in streamlit/*.py streamlit/environment.yml src/glacier_core.py; do
+  for f in streamlit/*.py streamlit/environment.yml src/*.py; do
     echo "PUT 'file://$PWD/$f' @$app.GLACIER_CODE/streamlit AUTO_COMPRESS = FALSE OVERWRITE = TRUE;"
   done
   for f in streamlit/pages/*.py; do
@@ -66,9 +67,16 @@ case "${1:-deploy}" in
   admin-sql)
     case "${2:-}" in
       setup)       render sql/00_admin_setup.sql ;;
-      integration) render sql/20_admin_integration.sql ;;
-      *) echo "Usage: $0 admin-sql setup|integration" >&2; exit 1 ;;
+      integration)
+        connector="$(echo "${3:-}" | tr '[:upper:]' '[:lower:]')"
+        if [[ -z "$connector" || ! -f "src/connector_$connector.py" ]]; then
+          echo "Usage: $0 admin-sql integration <connector>, e.g. salesforce" >&2; exit 1
+        fi
+        render sql/20_admin_integration.sql |
+          sed -e "s|{{CONNECTOR}}|$(echo "$connector" | tr '[:lower:]' '[:upper:]')|g" ;;
+      *) echo "Usage: $0 admin-sql setup|integration <connector>" >&2; exit 1 ;;
     esac ;;
+  migrate-sql) render sql/90_migrate_from_snowforce.sql ;;
   render)    deploy_sql ;;
   deploy)
     echo "==> Deploying Glacier to $app as $APP_ROLE via connection '$SNOW_CONNECTION'..."
@@ -79,5 +87,5 @@ case "${1:-deploy}" in
     echo "==> Deploying the Streamlit app to $app as $APP_ROLE via connection '$SNOW_CONNECTION'..."
     run_sql streamlit_sql
     ;;
-  *) sed -n '2,12p' "$(basename "$0")" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,14p' "$(basename "$0")" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

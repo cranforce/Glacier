@@ -8,7 +8,8 @@ from glacier_ui import core
 
 st.set_page_config(page_title="Jobs · Glacier", layout="wide")
 st.title("Jobs")
-st.caption("A job syncs one Salesforce object into one Snowflake table. See docs/jobs.md.")
+st.caption("A job syncs one object, such as a Salesforce object, into one Snowflake table. "
+           "See docs/jobs.md.")
 ui.show_flash()
 
 ctx = ui.context()
@@ -23,7 +24,7 @@ if not connections:
 
 if jobs:
     st.dataframe(
-        [{"JOB_NAME": j["JOB_NAME"], "CONNECTION": j["CONNECTION_NAME"], "OBJECT": j["SOBJECT"],
+        [{"JOB_NAME": j["JOB_NAME"], "CONNECTION": j["CONNECTION_NAME"], "OBJECT": j["SOURCE_OBJECT"],
           "TARGET": forms.target_table(j), "DELETES": j["DELETE_MODE"],
           "HISTORY": j["TRACK_HISTORY"], "SCHEDULE": j["SCHEDULE"], "ENABLED": j["ENABLED"],
           "TASK": states.get(j["JOB_NAME"], "not saved")} for j in jobs],
@@ -59,43 +60,43 @@ with left:
                         index=connections.index(job["CONNECTION_NAME"])
                         if job.get("CONNECTION_NAME") in connections else 0)
 
+    source = ui.connector(conn)
     objects = None
-    if ui.salesforce_ready():
+    if ui.connector_ready(source.NAME):
         try:
             objects = ui.list_objects(conn)
         except Exception as e:
-            st.warning(f"Couldn't list objects from Salesforce; type the API name instead. ({e})")
+            st.warning(f"Couldn't list objects from {source.LABEL}; type the name instead. ({e})")
     if objects:
         names = [o["name"] for o in objects]
-        current = default("SOBJECT")
+        current = default("SOURCE_OBJECT")
         if current and current not in names:
             names.insert(0, current)
         labels = {o["name"]: f"{o['name']} ({o['label']})" for o in objects}
-        sobject = st.selectbox("Object", names, key=key + "obj",
+        source_object = st.selectbox("Object", names, key=key + "obj",
                                index=names.index(current) if current else None,
                                format_func=lambda n: labels.get(n, n),
                                placeholder="Search objects...")
     else:
-        sobject = st.text_input("Object API name", value=default("SOBJECT", ""), key=key + "obj_text",
-                                placeholder="Subscription__c")
+        source_object = st.text_input("Object name", value=default("SOURCE_OBJECT", ""),
+                                      key=key + "obj_text", placeholder=source.OBJECT_PLACEHOLDER)
 
     fields = None
-    if sobject:
-        captured = ui.fields(conn, sobject)
+    if source_object:
+        captured = ui.fields(conn, source_object)
         if not captured:
-            st.caption(f"{sobject}'s fields haven't been captured yet.")
-            if st.button(f"Describe {sobject}", key=key + "describe"):
+            st.caption(f"{source_object}'s fields haven't been captured yet.")
+            if st.button(f"Describe {source_object}", key=key + "describe"):
                 try:
                     with st.spinner("Describing..."):
-                        ui.call("GLACIER_DESCRIBE", conn, sobject)
+                        ui.call_connector(conn, "DESCRIBE", source_object)
                 except Exception as e:
                     ui.show_error(e)
                 else:
                     st.rerun()
         all_fields = st.radio("Fields", ["Every exportable field", "Choose fields"], horizontal=True,
                               key=key + "all", index=1 if job.get("FIELDS") else 0,
-                              help="Id, SystemModstamp, and IsDeleted (unless deletes are off) "
-                                   "are always included. New fields are picked up on the next run.")
+                              help=f"{source.FIELDS_HELP} New fields are picked up on the next run.")
         if all_fields == "Choose fields":
             exportable = [f for f in captured if f["EXPORTABLE"]]
             by_field = {f["FIELD_NAME"]: f for f in exportable}
@@ -105,7 +106,7 @@ with left:
                 format_func=lambda n: f"{n} · {by_field[n]['LABEL']} · {by_field[n]['SNOWFLAKE_TYPE']}")
             if captured:
                 st.caption(f"{len(exportable)} of {len(captured)} fields are exportable; "
-                           "address, location, and base64 fields aren't.")
+                           f"{source.UNEXPORTABLE_NOTE}")
 
 with right:
     st.markdown("**Destination**")
@@ -115,10 +116,13 @@ with right:
                                   key=key + "schema")
     target_table = st.text_input(
         "Table", value=default("TARGET_TABLE", ""), key=key + "table",
-        placeholder=core.default_table_name(sobject) if sobject and core.SF_NAME.match(sobject) else "",
+        placeholder=core.default_table_name(source_object)
+        if source_object and core.IDENTIFIER.match(source_object) else "",
         help="Blank for the object name, uppercased. Set it to keep loading an existing table.")
-    delete_mode = st.selectbox("Deletes", core.DELETE_MODES, key=key + "deletes",
-                               index=core.DELETE_MODES.index(default("DELETE_MODE", "flag")),
+    delete_modes = list(source.DELETE_MODES)
+    current_mode = default("DELETE_MODE", "flag" if "flag" in delete_modes else delete_modes[0])
+    delete_mode = st.selectbox("Deletes", delete_modes, key=key + "deletes",
+                               index=delete_modes.index(current_mode) if current_mode in delete_modes else 0,
                                help="flag sets ISDELETED; remove deletes the row; off ignores deletes.")
     reconcile_days = st.number_input("Reconcile after days", min_value=1, step=1, key=key + "reconcile",
                                      value=int(default("RECONCILE_AFTER_DAYS", 14)),
@@ -152,12 +156,13 @@ with right:
 if st.button("Save job", type="primary"):
     try:
         saved = forms.validate_job({
-            "JOB_NAME": job_name if is_new else choice, "CONNECTION_NAME": conn, "SOBJECT": sobject,
+            "JOB_NAME": job_name if is_new else choice, "CONNECTION_NAME": conn,
+            "SOURCE_OBJECT": source_object,
             "FIELDS": fields, "TARGET_DATABASE": target_db, "TARGET_SCHEMA": target_schema,
             "TARGET_TABLE": target_table, "DELETE_MODE": delete_mode,
             "RECONCILE_AFTER_DAYS": reconcile_days, "TRACK_HISTORY": track_history,
             "RUN_AS_USER": run_as_user, "RUN_AS_ROLE": run_as_role, "WAREHOUSE": warehouse,
-            "SCHEDULE": schedule, "ENABLED": enabled}, app, ctx["role"])
+            "SCHEDULE": schedule, "ENABLED": enabled}, app, ctx["role"], source.NAME)
         if is_new and any(j["JOB_NAME"] == saved["JOB_NAME"] for j in jobs):
             raise core.ConfigError(f"A job named {saved['JOB_NAME']} already exists")
         ui.session().sql(forms.save_job_sql(app), params=forms.row_param(saved)).collect()

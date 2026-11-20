@@ -11,11 +11,13 @@ import sys
 
 import streamlit as st
 
-# Locally, glacier_core comes from app/src; deploy.sh uploads a copy next to this file.
+# Locally, glacier_core and the connectors come from app/src; deploy.sh uploads
+# copies next to this file.
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
 if os.path.isdir(_SRC):
     sys.path.insert(0, _SRC)
 
+import glacier_connectors as connectors  # noqa: E402
 import glacier_core as core  # noqa: E402
 
 
@@ -58,10 +60,19 @@ def app():
     return context()["app"]
 
 
+def _parsed(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
 def call(procedure, *args):
     """CALL an app procedure; VARIANT results come back parsed."""
-    result = session().call(f"{app()}.{procedure}", *args)
-    return json.loads(result) if isinstance(result, str) else result
+    return _parsed(session().call(f"{app()}.{procedure}", *args))
+
+
+def call_connector(connection_name, action, *args):
+    """CALL the connection's connector's procedure, e.g. GLACIER_SALESFORCE_TEST_CONNECTION."""
+    connector = connection(connection_name)["CONNECTOR"]
+    return call(core.procedure_name(connector, action), connection_name, *args)
 
 
 def show_error(e):
@@ -81,7 +92,22 @@ def show_flash():
 # --- Reads ------------------------------------------------------------------------
 
 def connections():
-    return rows(f"SELECT * FROM {app()}.GLACIER_CONNECTIONS ORDER BY CONNECTION_NAME")
+    result = rows(f"SELECT * FROM {app()}.GLACIER_CONNECTIONS ORDER BY CONNECTION_NAME")
+    for c in result:
+        c["SETTINGS"] = _parsed(c.get("SETTINGS")) or {}
+    return result
+
+
+def connection(connection_name):
+    match = [c for c in connections() if c["CONNECTION_NAME"] == connection_name]
+    if not match:
+        raise core.ConfigError(f"No connection named {connection_name!r}")
+    return match[0]
+
+
+def connector(connection_name):
+    """The connection's connector module."""
+    return connectors.get(connection(connection_name)["CONNECTOR"])
 
 
 def jobs():
@@ -95,10 +121,10 @@ def job(job_name):
     return row
 
 
-def fields(connection_name, sobject):
-    """Captured describe output for an object; empty until GLACIER_DESCRIBE has run."""
+def fields(connection_name, source_object):
+    """Captured fields for an object; empty until its connector's DESCRIBE has run."""
     return rows(f"SELECT * FROM {app()}.GLACIER_FIELDS WHERE CONNECTION_NAME = ? "
-                "AND UPPER(SOBJECT) = UPPER(?) ORDER BY POSITION", [connection_name, sobject])
+                "AND UPPER(SOURCE_OBJECT) = UPPER(?) ORDER BY POSITION", [connection_name, source_object])
 
 
 def runs(job_name=None, limit=100):
@@ -114,14 +140,15 @@ def task_states():
     return {t["name"][len(prefix):]: t["state"] for t in tasks}
 
 
-def salesforce_ready():
-    """Whether GLACIER_REFRESH_CONNECTIONS has created the Salesforce procedures."""
-    return bool(rows(f"SHOW PROCEDURES LIKE 'GLACIER_EXTRACT' IN SCHEMA {app()}"))
+def connector_ready(name):
+    """Whether GLACIER_REFRESH_CONNECTIONS has created the connector's procedures."""
+    procedure = core.procedure_name(name, "EXTRACT")
+    return bool(rows(f"SHOW PROCEDURES LIKE {core.sql_string(procedure)} IN SCHEMA {app()}"))
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading objects from Salesforce...")
+@st.cache_data(ttl=3600, show_spinner="Loading objects...")
 def list_objects(connection_name):
-    return sorted(call("GLACIER_LIST_OBJECTS", connection_name), key=lambda o: o["name"].lower())
+    return sorted(call_connector(connection_name, "LIST_OBJECTS"), key=lambda o: o["name"].lower())
 
 
 # --- Running jobs -----------------------------------------------------------------

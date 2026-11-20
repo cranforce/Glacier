@@ -6,12 +6,9 @@ locally. Values are bound as one JSON object (PARSE_JSON(?)), because Snowpark
 binds a Python None as the text 'None', but a JSON null becomes SQL NULL.
 """
 import json
-import re
 
+import glacier_connectors as connectors
 import glacier_core as core
-
-MY_DOMAIN_URL = re.compile(r"^https://[A-Za-z0-9-]+(\.sandbox)?\.my\.salesforce\.com/?$")
-API_VERSION = re.compile(r"^\d{2,3}\.0$")
 
 # Common schedules; "" is manual runs only
 SCHEDULES = {
@@ -26,7 +23,7 @@ SCHEDULES = {
 JOB_COLUMNS = (
     ("JOB_NAME", "VARCHAR"),
     ("CONNECTION_NAME", "VARCHAR"),
-    ("SOBJECT", "VARCHAR"),
+    ("SOURCE_OBJECT", "VARCHAR"),
     ("FIELDS", "ARRAY"),
     ("TARGET_DATABASE", "VARCHAR"),
     ("TARGET_SCHEMA", "VARCHAR"),
@@ -43,10 +40,8 @@ JOB_COLUMNS = (
 
 CONNECTION_COLUMNS = (
     ("CONNECTION_NAME", "VARCHAR"),
-    ("MY_DOMAIN_URL", "VARCHAR"),
-    ("CLIENT_ID", "VARCHAR"),
-    ("USERNAME", "VARCHAR"),
-    ("API_VERSION", "VARCHAR"),
+    ("CONNECTOR", "VARCHAR"),
+    ("SETTINGS", "OBJECT"),
     ("SECRET_NAME", "VARCHAR"),
     ("DESCRIPTION", "VARCHAR"),
 )
@@ -63,63 +58,47 @@ def _text(value):
 # --- Connections ----------------------------------------------------------------
 
 def secret_name(app, connection_name):
-    """The secret the app creates for a connection's private key."""
+    """The secret the app creates for a connection's credential."""
     return f"{app}.GLACIER_SECRET_{core.identifier(connection_name, 'connection name')}"
 
 
-def validate_private_key(pem):
-    pem = (pem or "").strip()
-    if not (pem.startswith("-----BEGIN") and pem.endswith("PRIVATE KEY-----")):
-        raise core.ConfigError("Paste the whole PEM private key, BEGIN and END lines included.")
-    return pem
-
-
 def validate_connection(values, app):
-    """A GLACIER_CONNECTIONS row from the form's values."""
+    """A GLACIER_CONNECTIONS row from the form's values; the connector checks its own settings."""
     name = core.identifier(_text(values.get("CONNECTION_NAME")), "connection name")
-    url = _text(values.get("MY_DOMAIN_URL")) or ""
-    if not MY_DOMAIN_URL.match(url):
-        raise core.ConfigError(
-            "My Domain URL must look like https://<domain>.my.salesforce.com "
-            "or https://<domain>.sandbox.my.salesforce.com")
-    api_version = _text(values.get("API_VERSION")) or "64.0"
-    if not API_VERSION.match(api_version):
-        raise core.ConfigError(f"Invalid API version: {api_version!r} (use e.g. 64.0)")
-    for column in ("CLIENT_ID", "USERNAME"):
-        if _blank(values.get(column)):
-            raise core.ConfigError(f"{column.replace('_', ' ').title()} is required")
+    connector = connectors.get(_text(values.get("CONNECTOR")))
     return {
         "CONNECTION_NAME": name,
-        "MY_DOMAIN_URL": url.rstrip("/"),
-        "CLIENT_ID": _text(values["CLIENT_ID"]),
-        "USERNAME": _text(values["USERNAME"]),
-        "API_VERSION": api_version,
+        "CONNECTOR": connector.NAME,
+        "SETTINGS": connector.validate_settings(values.get("SETTINGS")),
         "SECRET_NAME": _text(values.get("SECRET_NAME")) or secret_name(app, name),
         "DESCRIPTION": _text(values.get("DESCRIPTION")),
     }
 
 
-def create_secret_sql(secret, pem):
-    """CREATE SECRET for a private key. Snowflake masks the value in query history."""
+def create_secret_sql(secret, value, connector):
+    """CREATE SECRET for a connection's credential. Snowflake masks the value in query history."""
+    value = connectors.get(connector).validate_secret(value)
     return (f"CREATE OR REPLACE SECRET {secret}\n"
             "  TYPE = GENERIC_STRING\n"
-            f"  SECRET_STRING = {core.sql_string(validate_private_key(pem))}")
+            f"  SECRET_STRING = {core.sql_string(value)}")
 
 
 # --- Jobs -------------------------------------------------------------------------
 
-def validate_job(values, app, owner_role):
-    """A GLACIER_JOBS row from the form's values, checked the way a run and its task will."""
-    sobject = core.sf_name(_text(values.get("SOBJECT")), "object name")
+def validate_job(values, app, owner_role, connector):
+    """A GLACIER_JOBS row from the form's values, checked the way a run and its task will.
+    connector is the job's connection's connector name."""
+    source = connectors.get(connector)
+    source_object = source.object_name(_text(values.get("SOURCE_OBJECT")))
     fields = values.get("FIELDS")
     if fields is not None:
-        fields = [core.sf_name(f, "field name") for f in fields]
+        fields = [source.field_name(f) for f in fields]
         if not fields:
             raise core.ConfigError("Choose at least one field, or use every exportable field.")
     table = _text(values.get("TARGET_TABLE"))
     delete_mode = (_text(values.get("DELETE_MODE")) or "flag").lower()
-    if delete_mode not in core.DELETE_MODES:
-        raise core.ConfigError(f"Unknown delete mode {delete_mode!r}")
+    if delete_mode not in source.DELETE_MODES:
+        raise core.ConfigError(f"Unknown delete mode {delete_mode!r} for {source.LABEL}")
     try:
         reconcile_days = values.get("RECONCILE_AFTER_DAYS")
         reconcile_days = 14 if _blank(reconcile_days) else int(reconcile_days)
@@ -133,7 +112,7 @@ def validate_job(values, app, owner_role):
     job = {
         "JOB_NAME": core.identifier(_text(values.get("JOB_NAME")), "job name"),
         "CONNECTION_NAME": core.identifier(_text(values.get("CONNECTION_NAME")), "connection name"),
-        "SOBJECT": sobject,
+        "SOURCE_OBJECT": source_object,
         "FIELDS": fields,
         "TARGET_DATABASE": core.identifier(_text(values.get("TARGET_DATABASE")), "target database"),
         "TARGET_SCHEMA": core.identifier(_text(values.get("TARGET_SCHEMA")), "target schema"),
@@ -155,7 +134,7 @@ def validate_job(values, app, owner_role):
 def target_table(job):
     """The table a job loads, as DB.SCHEMA.TABLE."""
     return core.table_ref(job["TARGET_DATABASE"], job["TARGET_SCHEMA"],
-                          job.get("TARGET_TABLE") or core.default_table_name(job["SOBJECT"]))
+                          job.get("TARGET_TABLE") or core.default_table_name(job["SOURCE_OBJECT"]))
 
 
 # --- Saving -------------------------------------------------------------------------

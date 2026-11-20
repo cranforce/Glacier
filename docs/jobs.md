@@ -26,12 +26,12 @@ USE SCHEMA GLACIER_DB.APP;
 ## 1. Find the object and its fields
 
 ```sql
-CALL GLACIER_LIST_OBJECTS('ODBM_PROD');                 -- every queryable object
-CALL GLACIER_DESCRIBE('ODBM_PROD', 'Subscription__c');  -- capture its fields
+CALL GLACIER_SALESFORCE_LIST_OBJECTS('ODBM_PROD');                 -- every queryable object
+CALL GLACIER_SALESFORCE_DESCRIBE('ODBM_PROD', 'Subscription__c');  -- capture its fields
 
-SELECT FIELD_NAME, SF_TYPE, SNOWFLAKE_TYPE, EXPORTABLE
+SELECT FIELD_NAME, SOURCE_TYPE, SNOWFLAKE_TYPE, EXPORTABLE
 FROM GLACIER_FIELDS
-WHERE CONNECTION_NAME = 'ODBM_PROD' AND SOBJECT = 'Subscription__c'
+WHERE CONNECTION_NAME = 'ODBM_PROD' AND SOURCE_OBJECT = 'Subscription__c'
 ORDER BY POSITION;
 ```
 
@@ -44,7 +44,7 @@ describes the object itself if you haven't.
 
 ```sql
 INSERT INTO GLACIER_JOBS
-  (JOB_NAME, CONNECTION_NAME, SOBJECT, FIELDS, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
+  (JOB_NAME, CONNECTION_NAME, SOURCE_OBJECT, FIELDS, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
    DELETE_MODE, WAREHOUSE, SCHEDULE)
 SELECT 'SUBSCRIPTION', 'ODBM_PROD', 'Subscription__c',
        ARRAY_CONSTRUCT('Account__c', 'Status__c', 'Start_Date__c', 'End_Date__c'),
@@ -59,7 +59,7 @@ list.
 | --- | --- | --- |
 | `JOB_NAME` | yes | A plain identifier; also names the task |
 | `CONNECTION_NAME` | yes | A row in `GLACIER_CONNECTIONS` |
-| `SOBJECT` | yes | Salesforce API name, e.g. `Subscription__c` |
+| `SOURCE_OBJECT` | yes | The object to sync; for Salesforce, its API name, e.g. `Subscription__c` |
 | `FIELDS` | | Array of field API names. `NULL` for every exportable field. `Id` and `SystemModstamp` (and `IsDeleted` unless deletes are off) are always added |
 | `TARGET_DATABASE`, `TARGET_SCHEMA` | yes | Where the table goes |
 | `TARGET_TABLE` | | `NULL` for the object name uppercased (`SUBSCRIPTION__C`). Set it to keep loading an existing table; see [Table names](how-syncing-works.md#table-names) |
@@ -139,7 +139,7 @@ person), and optionally `RUN_AS_ROLE`. The task runs `EXECUTE AS USER`, starts i
 and switches with `USE ROLE` if a run-as role is set. A run-as role other than the app role needs
 a run-as user.
 
-A Snowflake admin grants, once per run-as user (also in `app/deploy.sh admin-sql integration`):
+A Snowflake admin grants, once per run-as user (also in `app/deploy.sh admin-sql integration salesforce`):
 
 ```sql
 GRANT IMPERSONATE ON USER <run_as_user> TO ROLE GLACIER_APP_ROLE;
@@ -149,10 +149,10 @@ GRANT ROLE <job_role> TO USER <run_as_user>;   -- only if the job switches roles
 
 A run-as role other than the app role also needs access to the app's objects, since
 `GLACIER_RUN_JOB` runs with its rights. Granting this isn't automated yet. It needs `USAGE` on
-the app database, schema, file format, and the `GLACIER_RUN_JOB`, `GLACIER_EXTRACT`, and
-`GLACIER_DESCRIBE` procedures; `READ` and `WRITE` on the `GLACIER_EXPORTS` stage; `SELECT`
-and `UPDATE` on `GLACIER_JOBS`; `SELECT` on `GLACIER_FIELDS`; and `INSERT` and `UPDATE` on
-`GLACIER_RUNS`.
+the app database, schema, file format, and the `GLACIER_RUN_JOB`, `GLACIER_SALESFORCE_EXTRACT`, and
+`GLACIER_SALESFORCE_DESCRIBE` procedures (or the job's connector's); `READ` and `WRITE` on the
+`GLACIER_EXPORTS` stage; `SELECT` and `UPDATE` on `GLACIER_JOBS`; `SELECT` on `GLACIER_CONNECTIONS`
+and `GLACIER_FIELDS`; and `INSERT` and `UPDATE` on `GLACIER_RUNS`.
 
 ## Changing a job
 
@@ -167,7 +167,7 @@ CALL GLACIER_SAVE_JOB_TASK('SUBSCRIPTION');
 ```
 
 To add a field, add it to `FIELDS` (or leave `FIELDS` `NULL`). If it's new in Salesforce, call
-`GLACIER_DESCRIBE` first so the job knows its type. The column is added to the table on the
+`GLACIER_SALESFORCE_DESCRIBE` first so the job knows its type. The column is added to the table on the
 next run.
 
 ## One-off full reloads and reconciles
@@ -216,7 +216,7 @@ ORDER BY STARTED_AT DESC;
 
 `MODE` is what the run actually did: a `sync` of a new table is recorded as `full`. `MESSAGE`
 explains anything unusual, such as a full load of an empty table or how many rows a reconcile
-flagged. `RUN_USER` and `RUN_ROLE` show who it ran as, and `SOQL` and `WATERMARK` show what it
+flagged. `RUN_USER` and `RUN_ROLE` show who it ran as, and `SOURCE_QUERY` and `WATERMARK` show what it
 asked Salesforce for.
 
 If a scheduled run doesn't appear in `GLACIER_RUNS` at all, the task failed before it started
@@ -241,9 +241,9 @@ WHERE ID = '<record id>' ORDER BY VALID_FROM;
 | Message | Fix |
 | --- | --- |
 | `No job named 'X'` | Check `JOB_NAME` in `GLACIER_JOBS` |
-| `Fields not on <Object>: ...` | Fix the field names, or `CALL GLACIER_DESCRIBE` if they're new in Salesforce |
+| `Fields not on <Object>: ...` | Fix the field names, or `CALL GLACIER_SALESFORCE_DESCRIBE` if they're new in Salesforce |
 | `<Object> has no IsDeleted field` | Set the job's `DELETE_MODE` to `off` |
-| `Salesforce returned no Ids; refusing to reconcile` | The integration user probably can't see the object's records; check its permissions |
+| `Salesforce returned no records; refusing to reconcile` | The integration user probably can't see the object's records; check its permissions |
 | `A run-as role other than the app's own role needs a run-as user.` | Set `RUN_AS_USER`, or clear `RUN_AS_ROLE` |
 | `Invalid schedule` | Use cron plus a time zone, e.g. `0 * * * * UTC` |
 | Insufficient privileges on the target | The job's role can't create or write the target table; grant it, or change the role |

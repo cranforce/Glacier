@@ -1,9 +1,12 @@
-"""Pure Glacier logic: names, column types, SOQL, and the load SQL.
+"""Pure Glacier logic: names, the load SQL, history, and procedure and task DDL.
 
-Nothing here talks to Snowflake or Salesforce, so it can be unit tested
+Nothing here talks to Snowflake or a source system, so it can be unit tested
 locally. The stored procedures in glacier_procs.py run the SQL built here.
+What's specific to a source (Salesforce, ShipHero) lives in its connector
+module; see glacier_connectors.py.
 """
 import re
+from dataclasses import dataclass
 from datetime import timedelta
 
 # Snowflake reserved words can only be table names when double-quoted, so
@@ -22,24 +25,64 @@ RESERVED = frozenset("""
 DELETE_MODES = ("off", "flag", "remove")
 RUN_MODES = ("sync", "full", "reconcile")
 
-# Compound and binary fields the Bulk API can't export
-UNEXPORTABLE_TYPES = frozenset({"address", "location", "base64"})
-
-SOQL_TIMESTAMP_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
-SOQL_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# Watermarks are UTC timestamps in ISO 8601, e.g. 2026-10-01T12:00:00Z
+WATERMARK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+WATERMARK = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
-SF_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 USER_NAME = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 CRON = re.compile(r"^[0-9A-Za-z*/,_ -]+$")
 
 # Python files every procedure imports from the code stage
-CODE_FILES = ("glacier_core.py", "sforce_api.py", "glacier_procs.py")
+CODE_FILES = ("glacier_core.py", "glacier_connectors.py", "glacier_procs.py",
+              "connector_salesforce.py", "sforce_api.py")
 PACKAGES = "('snowflake-snowpark-python', 'requests', 'cryptography')"
 
 
 class ConfigError(ValueError):
     """A job or connection setting that can't be used."""
+
+
+@dataclass(frozen=True)
+class Setting:
+    """One of a connector's connection settings, for the form and SETTINGS."""
+    key: str
+    label: str
+    default: str = ""
+    placeholder: str = ""
+    help: str = None
+
+
+@dataclass(frozen=True)
+class RecordKeys:
+    """The source fields the load SQL depends on, as the connector names them.
+
+    key identifies a record. change is its last-modified UTC timestamp, which
+    is the delta watermark and a history version's VALID_FROM. deleted is a
+    boolean deleted flag, or None if the source doesn't report deletes in its
+    data. untracked fields change without the record changing, so history
+    ignores them (as it does change).
+    """
+    key: str
+    change: str
+    deleted: str = None
+    untracked: tuple = ()
+
+    @property
+    def key_col(self):
+        return column_name(self.key)
+
+    @property
+    def change_col(self):
+        return column_name(self.change)
+
+    @property
+    def deleted_col(self):
+        return column_name(self.deleted) if self.deleted else None
+
+    @property
+    def untracked_cols(self):
+        return frozenset({self.change_col, *(column_name(f) for f in self.untracked)})
 
 
 # --- Names ------------------------------------------------------------------
@@ -63,9 +106,9 @@ def table_ref(database, schema, table):
     return f"{identifier(database, 'database')}.{identifier(schema, 'schema')}.{quoted}"
 
 
-def default_table_name(sobject):
-    """The object's API name uppercased (Order -> ORDER)."""
-    return identifier(sobject, "object name")
+def default_table_name(source_object):
+    """The source object's name uppercased (Order -> ORDER)."""
+    return identifier(source_object, "object name")
 
 
 def user_identifier(name):
@@ -73,12 +116,6 @@ def user_identifier(name):
     if not name or not USER_NAME.match(name):
         raise ConfigError(f"Invalid user name: {name!r}")
     return f'"{name.upper()}"'
-
-
-def sf_name(name, what="Salesforce name"):
-    if not name or not SF_NAME.match(name):
-        raise ConfigError(f"Invalid {what}: {name!r}")
-    return name
 
 
 def secret_alias(connection_name):
@@ -91,83 +128,37 @@ def sql_string(value):
     return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
 
 
-# --- Salesforce fields --------------------------------------------------------
-
-def snowflake_type(field):
-    """Snowflake column type for a Salesforce describe field.
-
-    The CSV export writes datetimes in UTC, so TIMESTAMP_NTZ holds UTC wall-clock
-    time. Time fields stay VARCHAR because Salesforce writes them with a trailing Z.
-    """
-    sf_type = field.get("type")
-    if sf_type == "boolean":
-        return "BOOLEAN"
-    if sf_type in ("int", "long"):
-        return "NUMBER(38,0)"
-    if sf_type in ("double", "currency", "percent"):
-        return f"NUMBER(38,{int(field.get('scale') or 0)})"
-    if sf_type == "date":
-        return "DATE"
-    if sf_type == "datetime":
-        return "TIMESTAMP_NTZ"
-    return "VARCHAR"
-
-
-def exportable(field):
-    return field.get("type") not in UNEXPORTABLE_TYPES
-
+# --- Columns -------------------------------------------------------------------
 
 def column_name(field_name):
-    """Snowflake column for a Salesforce field (Account.Name -> ACCOUNT_NAME)."""
+    """Snowflake column for a source field (Account.Name -> ACCOUNT_NAME)."""
     return field_name.strip().strip('"').upper().replace(".", "_")
 
 
 def normalize_header(line):
-    """Turn a Bulk API CSV header line into Snowflake column names."""
+    """Turn an export's CSV header line into Snowflake column names."""
     return [column_name(f) for f in line.rstrip("\r\n").split(",")]
 
 
-# --- SOQL ---------------------------------------------------------------------
-
-def build_soql(sobject, fields, since=None, extra_fields=()):
-    """SELECT the fields (plus Id, SystemModstamp, and any extras) from an object.
-
-    With since, only records modified at or after that UTC timestamp.
-    """
-    sf_name(sobject, "object name")
-    for f in fields:
-        sf_name(f, "field name")
-    have = {f.lower() for f in fields}
-    required = [f for f in ("Id", "SystemModstamp", *extra_fields) if f.lower() not in have]
-    soql = f"SELECT {', '.join(required + list(fields))} FROM {sobject}"
-    if since:
-        if not SOQL_TIMESTAMP.match(since):
-            raise ConfigError(f"Invalid watermark: {since!r}")
-        soql += f" WHERE SystemModstamp >= {since}"
-    return soql
-
-
-def build_ids_soql(sobject):
-    return f"SELECT Id FROM {sf_name(sobject, 'object name')}"
-
+# --- Runs ----------------------------------------------------------------------
 
 def reconcile_due(last_success, now, days):
-    """Whether deletes may have left the recycle bin since the last successful sync."""
+    """Whether deletes may have been missed since the last successful sync, e.g. by
+    leaving Salesforce's recycle bin."""
     return last_success is None or now - last_success > timedelta(days=days)
 
 
 # --- Load SQL -----------------------------------------------------------------
 
-IS_DELETED = "COALESCE(s.ISDELETED::BOOLEAN, FALSE)"
-
 # Type 2 history: <TABLE>__HISTORY keeps one row per version of each record.
 # VALID_TO is the next version's VALID_FROM; the current version has NULL.
 HISTORY_SUFFIX = "__HISTORY"
 HISTORY_COLUMNS = ("VALID_FROM", "VALID_TO", "IS_CURRENT")
-# Fields that change without the record changing: SystemModstamp moves on
-# system updates, and the Last*Date fields when someone views the record.
-UNTRACKED = frozenset({"SYSTEMMODSTAMP", "LASTVIEWEDDATE", "LASTREFERENCEDDATE"})
 NOW_UTC = "CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP())::TIMESTAMP_NTZ"
+
+
+def is_deleted(keys, alias="s"):
+    return f"COALESCE({alias}.{keys.deleted_col}::BOOLEAN, FALSE)"
 
 
 def column_defs(columns, types):
@@ -196,26 +187,29 @@ def add_columns_sql(fq_table, columns, types):
     return f"ALTER TABLE {fq_table} ADD COLUMN\n  {defs}"
 
 
-def latest_sql(delta_table):
-    """The delta's newest row per Id."""
+def latest_sql(delta_table, keys):
+    """The delta's newest row per record."""
     return (f"SELECT * FROM {delta_table}\n"
-            "  QUALIFY ROW_NUMBER() OVER (PARTITION BY ID ORDER BY SYSTEMMODSTAMP DESC) = 1")
+            f"  QUALIFY ROW_NUMBER() OVER (PARTITION BY {keys.key_col} "
+            f"ORDER BY {keys.change_col} DESC) = 1")
 
 
-def merge_sql(fq_table, delta_table, columns, delete_mode):
-    sets = ", ".join(f"{c} = s.{c}" for c in columns if c != "ID")
+def merge_sql(fq_table, delta_table, columns, delete_mode, keys):
+    key = keys.key_col
+    sets = ", ".join(f"{c} = s.{c}" for c in columns if c != key)
     insert_cols = ", ".join(columns)
     insert_vals = ", ".join(f"s.{c}" for c in columns)
     if delete_mode == "remove":
-        actions = (f"WHEN MATCHED AND {IS_DELETED} THEN DELETE\n"
+        deleted = is_deleted(keys)
+        actions = (f"WHEN MATCHED AND {deleted} THEN DELETE\n"
                    f"WHEN MATCHED THEN UPDATE SET {sets}\n"
-                   f"WHEN NOT MATCHED AND NOT {IS_DELETED} THEN INSERT ({insert_cols}) VALUES ({insert_vals})")
+                   f"WHEN NOT MATCHED AND NOT {deleted} THEN INSERT ({insert_cols}) VALUES ({insert_vals})")
     else:
         actions = (f"WHEN MATCHED THEN UPDATE SET {sets}\n"
                    f"WHEN NOT MATCHED THEN INSERT ({insert_cols}) VALUES ({insert_vals})")
     return (f"MERGE INTO {fq_table} t\n"
-            f"USING (\n  {latest_sql(delta_table)}\n) s\n"
-            "ON t.ID = s.ID\n"
+            f"USING (\n  {latest_sql(delta_table, keys)}\n) s\n"
+            f"ON t.{key} = s.{key}\n"
             f"{actions}")
 
 
@@ -223,35 +217,37 @@ def transaction(statements):
     return ["BEGIN", *statements, "COMMIT"]
 
 
-def history_table_sql(history_table, valid_type):
+def history_table_sql(history_table, valid_type, keys):
     """Create the history table if it's missing. Its other columns are added
     like the target's, so a reconcile can create it without knowing them."""
     return (f"CREATE TABLE IF NOT EXISTS {history_table} (\n"
-            f"  ID VARCHAR,\n  VALID_FROM {valid_type},\n  VALID_TO {valid_type},\n  IS_CURRENT BOOLEAN\n)")
+            f"  {keys.key_col} VARCHAR,\n  VALID_FROM {valid_type},\n  VALID_TO {valid_type},\n"
+            "  IS_CURRENT BOOLEAN\n)")
 
 
-def history_setup_statements(history_table, columns, types):
+def history_setup_statements(history_table, columns, types, keys):
     clash = [c for c in columns if c in HISTORY_COLUMNS]
     if clash:
         raise ConfigError(f"Can't track history: {', '.join(clash)} would clash with the history columns")
-    return [history_table_sql(history_table, types.get("SYSTEMMODSTAMP", "VARCHAR")),
+    return [history_table_sql(history_table, types.get(keys.change_col, "VARCHAR"), keys),
             add_columns_sql(history_table, columns, types)]
 
 
-def history_seed_sql(history_table, fq_table, columns):
+def history_seed_sql(history_table, fq_table, columns, keys):
     """Start an empty history from the target's rows, for history turned on for an existing table."""
     cols = ", ".join(columns)
     return (f"INSERT INTO {history_table} ({cols}, VALID_FROM, VALID_TO, IS_CURRENT)\n"
-            f"  SELECT {cols}, SYSTEMMODSTAMP, NULL, TRUE FROM {fq_table}\n"
+            f"  SELECT {cols}, {keys.change_col}, NULL, TRUE FROM {fq_table}\n"
             f"  WHERE NOT EXISTS (SELECT 1 FROM {history_table})")
 
 
-def _row_hash(alias, columns):
-    return "HASH(" + ", ".join(f"{alias}.{c}" for c in columns if c not in UNTRACKED) + ")"
+def _row_hash(alias, columns, keys):
+    untracked = keys.untracked_cols
+    return "HASH(" + ", ".join(f"{alias}.{c}" for c in columns if c not in untracked) + ")"
 
 
-def history_apply_statements(history_table, source, columns, close_missing=False):
-    """Close each current version whose values differ from source (a query with one row per Id),
+def history_apply_statements(history_table, source, columns, keys, close_missing=False):
+    """Close each current version whose values differ from source (a query with one row per record),
     then add a current version for every changed or new record.
 
     Versions older than what history already has are skipped, so re-fetched
@@ -259,43 +255,45 @@ def history_apply_statements(history_table, source, columns, close_missing=False
     close_missing, source is the whole object and current versions it no longer
     has are closed.
     """
+    key, change = keys.key_col, keys.change_col
     cols = ", ".join(columns)
     statements = [
-        f"UPDATE {history_table} h SET VALID_TO = s.SYSTEMMODSTAMP, IS_CURRENT = FALSE\n"
+        f"UPDATE {history_table} h SET VALID_TO = s.{change}, IS_CURRENT = FALSE\n"
         f"  FROM ({source}) s\n"
-        "  WHERE h.ID = s.ID AND h.IS_CURRENT AND s.SYSTEMMODSTAMP >= h.VALID_FROM\n"
-        f"    AND {_row_hash('h', columns)} <> {_row_hash('s', columns)}"]
+        f"  WHERE h.{key} = s.{key} AND h.IS_CURRENT AND s.{change} >= h.VALID_FROM\n"
+        f"    AND {_row_hash('h', columns, keys)} <> {_row_hash('s', columns, keys)}"]
     if close_missing:
-        statements.append(close_history_sql(history_table, f"SELECT ID FROM ({source})"))
+        statements.append(close_history_sql(history_table, f"SELECT {key} FROM ({source})", keys))
     statements.append(
         f"INSERT INTO {history_table} ({cols}, VALID_FROM, VALID_TO, IS_CURRENT)\n"
-        f"  SELECT {', '.join(f's.{c}' for c in columns)}, s.SYSTEMMODSTAMP, NULL, TRUE\n"
+        f"  SELECT {', '.join(f's.{c}' for c in columns)}, s.{change}, NULL, TRUE\n"
         f"  FROM ({source}) s\n"
         f"  WHERE NOT EXISTS (SELECT 1 FROM {history_table} h\n"
-        "    WHERE h.ID = s.ID AND (h.IS_CURRENT OR h.VALID_TO > s.SYSTEMMODSTAMP))")
+        f"    WHERE h.{key} = s.{key} AND (h.IS_CURRENT OR h.VALID_TO > s.{change}))")
     return statements
 
 
-def close_history_sql(history_table, ids_sql):
-    """End the current version of every record not in ids_sql: it's gone from Salesforce."""
+def close_history_sql(history_table, ids_sql, keys):
+    """End the current version of every record not in ids_sql: it's gone from the source."""
     return (f"UPDATE {history_table} SET VALID_TO = {NOW_UTC}, IS_CURRENT = FALSE\n"
-            f"  WHERE IS_CURRENT AND ID NOT IN ({ids_sql})")
+            f"  WHERE IS_CURRENT AND {keys.key_col} NOT IN ({ids_sql})")
 
 
-def full_load_statements(fq_table, columns, types, stage_path, file_format, has_rows, history_table=None):
+def full_load_statements(fq_table, columns, types, stage_path, file_format, has_rows, keys,
+                         history_table=None):
     """With history_table, COPY is still statement 1 and the history work follows.
     An empty load leaves history alone rather than closing every record."""
     statements = [create_table_sql(fq_table, columns, types, replace=True)]
     if has_rows:
         statements.append(copy_sql(fq_table, stage_path, file_format))
         if history_table:
-            statements += history_setup_statements(history_table, columns, types)
+            statements += history_setup_statements(history_table, columns, types, keys)
             statements += transaction(history_apply_statements(
-                history_table, f"SELECT * FROM {fq_table}", columns, close_missing=True))
+                history_table, f"SELECT * FROM {fq_table}", columns, keys, close_missing=True))
     return statements
 
 
-def delta_statements(fq_table, delta_table, columns, types, stage_path, file_format, delete_mode,
+def delta_statements(fq_table, delta_table, columns, types, stage_path, file_format, delete_mode, keys,
                      history_table=None):
     """The MERGE is the last statement, or with history_table, the one before
     COMMIT, after the history INSERT."""
@@ -304,81 +302,96 @@ def delta_statements(fq_table, delta_table, columns, types, stage_path, file_for
     defs = ",\n  ".join(column_defs(columns, types))
     statements = [add_columns_sql(fq_table, columns, types)]
     if history_table:
-        statements += history_setup_statements(history_table, columns, types)
-        statements.append(history_seed_sql(history_table, fq_table, columns))
+        statements += history_setup_statements(history_table, columns, types, keys)
+        statements.append(history_seed_sql(history_table, fq_table, columns, keys))
     statements += [
         f"CREATE OR REPLACE TEMPORARY TABLE {delta_table} (\n  {defs}\n)",
         copy_sql(delta_table, stage_path, file_format),
     ]
-    merge = merge_sql(fq_table, delta_table, columns, delete_mode)
+    merge = merge_sql(fq_table, delta_table, columns, delete_mode, keys)
     if not history_table:
         return statements + [merge]
     return statements + transaction(
-        history_apply_statements(history_table, latest_sql(delta_table), columns) + [merge])
+        history_apply_statements(history_table, latest_sql(delta_table, keys), columns, keys) + [merge])
 
 
-def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mode,
+def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mode, keys,
                          history_table=None, valid_type="TIMESTAMP_NTZ"):
-    """Flag or remove every row whose Id no longer exists in Salesforce, and with
+    """Flag or remove every row whose key no longer exists in the source, and with
     history_table, end those records' current versions. The flag or remove is the
     last statement, or the one before COMMIT."""
+    key, deleted = keys.key_col, keys.deleted_col
     statements = [
-        f"CREATE OR REPLACE TEMPORARY TABLE {ids_table} (ID VARCHAR)",
+        f"CREATE OR REPLACE TEMPORARY TABLE {ids_table} ({key} VARCHAR)",
         copy_sql(ids_table, stage_path, file_format),
     ]
     if delete_mode == "remove":
-        apply = f"DELETE FROM {fq_table} WHERE ID NOT IN (SELECT ID FROM {ids_table})"
+        apply = f"DELETE FROM {fq_table} WHERE {key} NOT IN (SELECT {key} FROM {ids_table})"
     else:
-        statements.append(f"ALTER TABLE {fq_table} ADD COLUMN IF NOT EXISTS ISDELETED BOOLEAN")
-        apply = (f"UPDATE {fq_table} SET ISDELETED = TRUE\n"
-                 f"  WHERE ID NOT IN (SELECT ID FROM {ids_table})\n"
-                 "    AND NOT COALESCE(ISDELETED::BOOLEAN, FALSE)")
+        statements.append(f"ALTER TABLE {fq_table} ADD COLUMN IF NOT EXISTS {deleted} BOOLEAN")
+        apply = (f"UPDATE {fq_table} SET {deleted} = TRUE\n"
+                 f"  WHERE {key} NOT IN (SELECT {key} FROM {ids_table})\n"
+                 f"    AND NOT COALESCE({deleted}::BOOLEAN, FALSE)")
     if not history_table:
         return statements + [apply]
-    return statements + [history_table_sql(history_table, valid_type)] + transaction(
-        [close_history_sql(history_table, f"SELECT ID FROM {ids_table}"), apply])
+    return statements + [history_table_sql(history_table, valid_type, keys)] + transaction(
+        [close_history_sql(history_table, f"SELECT {key} FROM {ids_table}", keys), apply])
 
 
-def watermark_sql(fq_table, data_type):
-    """MAX(SYSTEMMODSTAMP) as a SOQL UTC timestamp, whatever the column's type."""
+def watermark_sql(fq_table, data_type, keys):
+    """MAX of the change column as an ISO 8601 UTC timestamp, whatever the column's type."""
+    change = keys.change_col
     if data_type == "TIMESTAMP_NTZ":
-        expr = "MAX(SYSTEMMODSTAMP)"  # already UTC
+        expr = f"MAX({change})"  # already UTC
     elif data_type in ("TIMESTAMP_TZ", "TIMESTAMP_LTZ"):
-        expr = "CONVERT_TIMEZONE('UTC', MAX(SYSTEMMODSTAMP))"
+        expr = f"CONVERT_TIMEZONE('UTC', MAX({change}))"
     else:
-        expr = "CONVERT_TIMEZONE('UTC', MAX(TRY_TO_TIMESTAMP_TZ(SYSTEMMODSTAMP::VARCHAR)))"
-    return f"SELECT TO_VARCHAR({expr}, '{SOQL_TIMESTAMP_FORMAT}') AS WATERMARK FROM {fq_table}"
+        expr = f"CONVERT_TIMEZONE('UTC', MAX(TRY_TO_TIMESTAMP_TZ({change}::VARCHAR)))"
+    return f"SELECT TO_VARCHAR({expr}, '{WATERMARK_FORMAT}') AS WATERMARK FROM {fq_table}"
 
 
 # --- Procedure and task DDL ---------------------------------------------------
 
-# Procedures that read connection secrets: (name, arguments, returns, handler)
+# Procedures that read a connector's secrets: (action, arguments, handler). Each
+# connector gets its own set, GLACIER_<CONNECTOR>_<ACTION>, which can read only
+# that connector's secrets and reach only its hosts.
 SECRET_PROCEDURES = (
-    ("GLACIER_TEST_CONNECTION", "CONNECTION_NAME VARCHAR", "VARIANT", "test_connection"),
-    ("GLACIER_LIST_OBJECTS", "CONNECTION_NAME VARCHAR", "VARIANT", "list_objects"),
-    ("GLACIER_DESCRIBE", "CONNECTION_NAME VARCHAR, SOBJECT VARCHAR", "VARIANT", "describe"),
-    ("GLACIER_EXTRACT",
-     "CONNECTION_NAME VARCHAR, SOQL VARCHAR, ALL_ROWS BOOLEAN, RUN_ID VARCHAR", "VARIANT", "extract"),
+    ("TEST_CONNECTION", "CONNECTION_NAME VARCHAR", "test_connection"),
+    ("LIST_OBJECTS", "CONNECTION_NAME VARCHAR", "list_objects"),
+    ("DESCRIBE", "CONNECTION_NAME VARCHAR, SOURCE_OBJECT VARCHAR", "describe"),
+    ("EXTRACT",
+     "CONNECTION_NAME VARCHAR, SOURCE_QUERY VARCHAR, INCLUDE_DELETED BOOLEAN, RUN_ID VARCHAR", "extract"),
 )
+
+
+def procedure_name(connector, action):
+    """A connector's procedure, e.g. GLACIER_SALESFORCE_EXTRACT."""
+    return f"GLACIER_{identifier(connector, 'connector')}_{action}"
+
+
+def integration_name(connector):
+    """The external access integration an admin creates for a connector."""
+    return f"GLACIER_{identifier(connector, 'connector')}_EAI"
 
 
 def imports_clause(app):
     return "(" + ", ".join(f"'@{app}.GLACIER_CODE/{f}'" for f in CODE_FILES) + ")"
 
 
-def secret_procedure_ddl(app, integration, connections):
-    """CREATE statements for the procedures that call Salesforce.
+def secret_procedure_ddl(app, connector, integration, connections):
+    """CREATE statements for the procedures that call one connector's source.
 
     A procedure's secrets are fixed when it's created, so these are re-created
     whenever a connection is added or removed. connections is a list of
-    (connection name, fully qualified secret name).
+    (connection name, fully qualified secret name) for this connector.
     """
     secrets = ", ".join(f"'{secret_alias(name)}' = {secret}" for name, secret in connections)
     statements = []
-    for name, args, returns, handler in SECRET_PROCEDURES:
+    for action, args, handler in SECRET_PROCEDURES:
         statements.append(
-            f"CREATE OR REPLACE PROCEDURE {app}.{name}({args}, APP_SCHEMA VARCHAR DEFAULT '{app}')\n"
-            f"  RETURNS {returns}\n"
+            f"CREATE OR REPLACE PROCEDURE {app}.{procedure_name(connector, action)}({args}, "
+            f"CONNECTOR VARCHAR DEFAULT '{connector.lower()}', APP_SCHEMA VARCHAR DEFAULT '{app}')\n"
+            "  RETURNS VARIANT\n"
             "  LANGUAGE PYTHON\n"
             "  RUNTIME_VERSION = '3.11'\n"
             f"  PACKAGES = {PACKAGES}\n"

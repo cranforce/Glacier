@@ -1,4 +1,4 @@
-"""Glacier: manage Salesforce connections and sync jobs.
+"""Glacier: manage connections to source systems and sync jobs.
 
 The pages are in pages/. Everything they do goes through the app's tables and
 procedures (see app/README.md), so a job behaves the same whether it was set
@@ -10,18 +10,22 @@ import glacier_ui as ui
 
 st.set_page_config(page_title="Glacier", layout="wide")
 st.title("Glacier")
-st.caption("Sync Salesforce objects into Snowflake")
+st.caption("Sync enterprise systems into Snowflake")
 
 ctx = ui.context()
 st.write(f"App schema `{ctx['app']}`, running as role `{ctx['role']}`.")
 
-if not ui.salesforce_ready():
-    st.warning(
-        "The Salesforce procedures don't exist yet, so connections can't be tested and jobs "
-        "can't run. A Snowflake admin needs to create the external access integration "
-        "(`app/deploy.sh admin-sql integration`); then add a connection on the **Connections** page.")
-
 connections = ui.connections()
+for name in sorted({c["CONNECTOR"] for c in connections}):
+    if not ui.connector_ready(name):
+        st.warning(
+            f"The {ui.connectors.get(name).LABEL} procedures don't exist yet, so its connections can't "
+            "be tested and its jobs can't run. A Snowflake admin needs to create the external access "
+            f"integration (`app/deploy.sh admin-sql integration {name}`); then save a connection on "
+            "the **Connections** page.")
+if not connections:
+    st.info("Add a connection on the **Connections** page to get started.")
+
 jobs = ui.jobs()
 recent = ui.runs(limit=50)
 

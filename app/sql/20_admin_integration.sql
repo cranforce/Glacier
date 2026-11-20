@@ -1,18 +1,19 @@
 -- One-time setup for a Snowflake admin (ACCOUNTADMIN, or a role with
--- CREATE INTEGRATION). Run after the first deploy.sh, which creates the network rule.
--- Print a filled-in copy with:  app/deploy.sh admin-sql integration
+-- CREATE INTEGRATION), once per connector. Run after the first deploy.sh,
+-- which creates the connector's network rule.
+-- Print a filled-in copy with:  app/deploy.sh admin-sql integration <connector>
 
 USE ROLE ACCOUNTADMIN;
 
--- Lets the Glacier procedures reach Salesforce. ALLOWED_AUTHENTICATION_SECRETS
+-- Lets the connector's procedures reach its hosts. ALLOWED_AUTHENTICATION_SECRETS
 -- = ALL means adding a connection needs no admin; only {{APP_ROLE}} can use it.
-CREATE EXTERNAL ACCESS INTEGRATION IF NOT EXISTS {{APP_INTEGRATION}}
-  ALLOWED_NETWORK_RULES = ({{APP}}.GLACIER_SALESFORCE_EGRESS)
+CREATE EXTERNAL ACCESS INTEGRATION IF NOT EXISTS GLACIER_{{CONNECTOR}}_EAI
+  ALLOWED_NETWORK_RULES = ({{APP}}.GLACIER_{{CONNECTOR}}_EGRESS)
   ALLOWED_AUTHENTICATION_SECRETS = ALL
   ENABLED = TRUE
-  COMMENT = 'Glacier: Salesforce Bulk API access';
+  COMMENT = 'Glacier: {{CONNECTOR}} connector';
 
-GRANT USAGE ON INTEGRATION {{APP_INTEGRATION}} TO ROLE {{APP_ROLE}};
+GRANT USAGE ON INTEGRATION GLACIER_{{CONNECTOR}}_EAI TO ROLE {{APP_ROLE}};
 
 -- For each user a job runs as (EXECUTE AS USER). The task owner role must be
 -- able to impersonate the user, and the user must hold the task owner role.

@@ -36,7 +36,7 @@ in Salesforce, refresh the schema first so it gets the right type:
 | | |
 | --- | --- |
 | Local | Add it to `queries/<Object>.soql`; run `./run.sh schema <Object>` if it's new |
-| Snowflake | Add it to the job's `FIELDS`; `CALL GLACIER_DESCRIBE('<connection>', '<Object>')` if it's new |
+| Snowflake | Add it to the job's `FIELDS`; `CALL GLACIER_SALESFORCE_DESCRIBE('<connection>', '<Object>')` if it's new |
 
 ## Deletes
 
