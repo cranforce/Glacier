@@ -36,6 +36,6 @@ if recent:
     st.dataframe(
         [{k: r[k] for k in ("JOB_NAME", "MODE", "STATUS", "STARTED_AT", "FINISHED_AT",
                             "ROWS_EXPORTED", "MESSAGE")} for r in recent[:10]],
-        use_container_width=True, hide_index=True)
+        width="stretch", hide_index=True)
 else:
     st.info("No runs yet. Create a job on the **Jobs** page.")

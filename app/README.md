@@ -21,7 +21,7 @@ with SQL ([sql/examples.sql](sql/examples.sql)).
 | `streamlit/` | The Streamlit app: a home page, and Connections, Jobs, and Runs pages |
 | `streamlit/snowforce_forms.py` | Pure logic behind the forms: validation and the save SQL |
 | `streamlit/snowforce_ui.py` | Session, app schema, and reads and calls shared by the pages |
-| `streamlit/pyproject.toml` | Packages the Streamlit container runtime installs |
+| `streamlit/environment.yml` | The app's packages, from Snowflake's Anaconda channel |
 | `streamlit/run_local.sh` | Run the app on your machine against the deployed engine |
 | `tests/` | Unit tests for the pure logic, the Salesforce client, and the forms |
 

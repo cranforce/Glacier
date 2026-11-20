@@ -44,7 +44,7 @@ streamlit_sql() {
   echo "-- Streamlit app"
   echo "USE ROLE $APP_ROLE;"
   echo "USE WAREHOUSE $APP_WAREHOUSE;"
-  for f in streamlit/*.py streamlit/pyproject.toml src/snowforce_core.py; do
+  for f in streamlit/*.py streamlit/environment.yml src/snowforce_core.py; do
     echo "PUT 'file://$PWD/$f' @$app.SNOWFORCE_CODE/streamlit AUTO_COMPRESS = FALSE OVERWRITE = TRUE;"
   done
   for f in streamlit/pages/*.py; do

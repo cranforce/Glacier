@@ -3,7 +3,7 @@
 # app role from app.env (the deployed app runs as that role too).
 #
 # Needs Python 3.11 with the app's packages:
-#   python3.11 -m pip install streamlit snowflake-snowpark-python
+#   python3.11 -m pip install streamlit==1.52.2 snowflake-snowpark-python
 #
 # Usage: app/streamlit/run_local.sh [streamlit options]
 

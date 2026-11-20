@@ -26,7 +26,7 @@ def session():
             from snowflake.snowpark.context import get_active_session
             return get_active_session()
         except Exception:
-            return st.connection("snowflake").session()  # the container runtime's way
+            return st.connection("snowflake").session()
     from snowflake.snowpark import Session
     s = Session.builder.config("connection_name", os.environ["SNOWFORCE_CONNECTION"]).create()
     if os.environ.get("SNOWFORCE_ROLE"):

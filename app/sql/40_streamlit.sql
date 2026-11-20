@@ -6,9 +6,10 @@
 CREATE OR REPLACE STREAMLIT {{APP}}.SNOWFORCE_APP
   FROM '@{{APP}}.SNOWFORCE_CODE/streamlit'
   MAIN_FILE = 'streamlit_app.py'
-  -- The container runtime installs the packages in pyproject.toml
-  RUNTIME_NAME = 'SYSTEM$ST_CONTAINER_RUNTIME_PY3_11'
-  COMPUTE_POOL = SYSTEM_COMPUTE_POOL_CPU
+  -- The warehouse runtime installs environment.yml from Snowflake's Anaconda
+  -- channel. The container runtime would need an external access integration
+  -- for PyPI.
+  RUNTIME_NAME = 'SYSTEM$WAREHOUSE_RUNTIME'
   QUERY_WAREHOUSE = {{APP_WAREHOUSE}}
   TITLE = 'Snowforce'
   COMMENT = 'Snowforce: Salesforce connections and sync jobs';

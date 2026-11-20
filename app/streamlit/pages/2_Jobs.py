@@ -27,7 +27,7 @@ if jobs:
           "TARGET": forms.target_table(j), "DELETES": j["DELETE_MODE"],
           "HISTORY": j["TRACK_HISTORY"], "SCHEDULE": j["SCHEDULE"], "ENABLED": j["ENABLED"],
           "TASK": states.get(j["JOB_NAME"], "not saved")} for j in jobs],
-        use_container_width=True, hide_index=True)
+        width="stretch", hide_index=True)
 
 # --- Editor -------------------------------------------------------------------------
 

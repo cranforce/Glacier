@@ -59,7 +59,7 @@ st.dataframe(
     [{k: r[k] for k in ("JOB_NAME", "MODE", "STATUS", "STARTED_AT", "FINISHED_AT", "ROWS_EXPORTED",
                         "ROWS_INSERTED", "ROWS_UPDATED", "ROWS_DELETED", "RUN_USER", "RUN_ROLE",
                         "MESSAGE")} for r in history],
-    use_container_width=True, hide_index=True)
+    width="stretch", hide_index=True)
 
 failed = [r for r in history if r["STATUS"] == "FAILED"]
 if failed:

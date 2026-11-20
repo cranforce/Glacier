@@ -1,9 +1,0 @@
-# Dependencies the Streamlit container runtime installs for the app
-[project]
-name = "snowforce-app"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "streamlit>=1.39",
-    "snowflake-snowpark-python",
-]

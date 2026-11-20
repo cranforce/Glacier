@@ -19,7 +19,7 @@ if connections:
     st.dataframe(
         [{k: c[k] for k in ("CONNECTION_NAME", "MY_DOMAIN_URL", "USERNAME", "API_VERSION",
                             "SECRET_NAME", "DESCRIPTION")} for c in connections],
-        use_container_width=True, hide_index=True)
+        width="stretch", hide_index=True)
 else:
     st.info("No connections yet.")
 
