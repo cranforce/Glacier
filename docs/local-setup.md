@@ -24,8 +24,8 @@ Run Glacier from your own machine with the `sf` and `snow` CLIs.
 ## 1. Clone the repo
 
 ```sh
-git clone https://github.com/cranforce/Snowforce.git
-cd Snowforce
+git clone https://github.com/cranforce/Glacier.git
+cd Glacier
 ```
 
 ## 2. Log in to Salesforce

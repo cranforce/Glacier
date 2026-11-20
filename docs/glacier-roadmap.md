@@ -48,9 +48,6 @@ Still to do outside the repo:
 - **`GLACIER_WH` doesn't exist yet.** The local CLI (`project.env`, `bin/sf_to_snowflake.sh`)
   and the ad hoc SQL now default to it. Until it's created, run the CLI with
   `SNOW_WAREHOUSE=SNOWFORCE_WH ./run.sh`.
-- **The GitHub repository is still `cranforce/Snowforce`.** The docs site links to that name.
-  Rename it in GitHub (it redirects the old URL), then update `docs/_config.yml` and
-  `docs/local-setup.md`.
 - **The engine deployed in `CRM_DB.CMILLER_SF_PLAYGROUND` still uses the `SNOWFORCE_` names.**
   Leave it running until the cutover in phase 3. Don't run `app/deploy.sh` against the
   playground from this branch, because it would create a second set of `GLACIER_` objects next to it.
