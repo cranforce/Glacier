@@ -1,6 +1,9 @@
-# Salesforce → Snowflake
+# Glacier
 
-Exports Salesforce objects with the `sf` CLI (Bulk API 2.0) and loads them into
+Syncs enterprise systems into Snowflake. Salesforce is supported today; ShipHero and others are
+planned (see the [roadmap](docs/glacier-roadmap.md)).
+
+The local CLI below exports Salesforce objects with the `sf` CLI (Bulk API 2.0) and loads them into
 Snowflake with the `snow` CLI.
 
 Full documentation, including setup and running jobs inside Snowflake, is in

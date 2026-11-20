@@ -14,7 +14,7 @@ differently, both are shown.
 
 ## Types
 
-Column types come from the Salesforce schema (`sf sobject describe` locally, `SNOWFORCE_FIELDS`
+Column types come from the Salesforce schema (`sf sobject describe` locally, `GLACIER_FIELDS`
 in Snowflake). Text fields such as postal codes stay `VARCHAR`, and datetimes load as
 `TIMESTAMP_NTZ` in UTC.
 
@@ -36,7 +36,7 @@ in Salesforce, refresh the schema first so it gets the right type:
 | | |
 | --- | --- |
 | Local | Add it to `queries/<Object>.soql`; run `./run.sh schema <Object>` if it's new |
-| Snowflake | Add it to the job's `FIELDS`; `CALL SNOWFORCE_DESCRIBE('<connection>', '<Object>')` if it's new |
+| Snowflake | Add it to the job's `FIELDS`; `CALL GLACIER_DESCRIBE('<connection>', '<Object>')` if it's new |
 
 ## Deletes
 
@@ -67,7 +67,7 @@ weeks keeps deletes cheap. Run one yourself any time, for example after a mass d
 | | |
 | --- | --- |
 | Local | `./run.sh reconcile [Object...]` |
-| Snowflake | `CALL SNOWFORCE_RUN_JOB('<job>', 'reconcile')` |
+| Snowflake | `CALL GLACIER_RUN_JOB('<job>', 'reconcile')` |
 
 Notes:
 

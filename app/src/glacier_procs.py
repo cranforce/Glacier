@@ -1,11 +1,11 @@
-"""Stored procedure handlers for Snowforce.
+"""Stored procedure handlers for Glacier.
 
 Two kinds of procedure, kept apart on purpose:
 
-* Owner's rights (SNOWFORCE_EXTRACT, _DESCRIBE, _LIST_OBJECTS, _TEST_CONNECTION,
+* Owner's rights (GLACIER_EXTRACT, _DESCRIBE, _LIST_OBJECTS, _TEST_CONNECTION,
   _SAVE_JOB_TASK, _REFRESH_CONNECTIONS) hold the Salesforce secrets and manage
   app objects. They never write destination tables.
-* Caller's rights (SNOWFORCE_RUN_JOB) runs as the job's role, so a job can only
+* Caller's rights (GLACIER_RUN_JOB) runs as the job's role, so a job can only
   read and write what that role can.
 
 Every handler takes the app schema (DB.SCHEMA) as its last argument; the
@@ -16,10 +16,10 @@ import json
 import uuid
 from datetime import datetime, timezone
 
-import snowforce_core as core
+import glacier_core as core
 from sforce_api import Salesforce
 
-FILE_FORMAT = "SNOWFORCE_CSV"
+FILE_FORMAT = "GLACIER_CSV"
 
 
 # --- Helpers ------------------------------------------------------------------
@@ -39,7 +39,7 @@ def _variant(value):
 
 
 def _connection(session, app, connection_name):
-    conn = _one(session, f"SELECT * FROM {app}.SNOWFORCE_CONNECTIONS WHERE CONNECTION_NAME = ?",
+    conn = _one(session, f"SELECT * FROM {app}.GLACIER_CONNECTIONS WHERE CONNECTION_NAME = ?",
                 [core.identifier(connection_name, "connection name")])
     if conn is None:
         raise core.ConfigError(f"No connection named {connection_name!r}")
@@ -54,7 +54,7 @@ def _salesforce(session, app, connection_name):
     except Exception as e:
         raise core.ConfigError(
             f"Connection {conn['CONNECTION_NAME']} has no usable secret; "
-            f"run CALL {app}.SNOWFORCE_REFRESH_CONNECTIONS() after adding it ({e})") from e
+            f"run CALL {app}.GLACIER_REFRESH_CONNECTIONS() after adding it ({e})") from e
     for column in ("CLIENT_ID", "USERNAME"):
         if not conn.get(column):
             raise core.ConfigError(f"Connection {conn['CONNECTION_NAME']} has no {column}")
@@ -78,7 +78,7 @@ def list_objects(session, connection_name, app):
 
 
 def describe(session, connection_name, sobject, app):
-    """Capture an object's fields into SNOWFORCE_FIELDS (replaces schema/<Object>.*)."""
+    """Capture an object's fields into GLACIER_FIELDS (replaces schema/<Object>.*)."""
     conn = core.identifier(connection_name, "connection name")
     result = _salesforce(session, app, conn).describe(core.sf_name(sobject, "object name"))
     name = result["name"]  # Salesforce's own casing
@@ -98,10 +98,10 @@ def describe(session, connection_name, sobject, app):
         "exportable": core.exportable(f),
     } for i, f in enumerate(result["fields"])]
 
-    session.sql(f"DELETE FROM {app}.SNOWFORCE_FIELDS WHERE CONNECTION_NAME = ? AND SOBJECT = ?",
+    session.sql(f"DELETE FROM {app}.GLACIER_FIELDS WHERE CONNECTION_NAME = ? AND SOBJECT = ?",
                 params=[conn, name]).collect()
     session.sql(f"""
-        INSERT INTO {app}.SNOWFORCE_FIELDS
+        INSERT INTO {app}.GLACIER_FIELDS
           (CONNECTION_NAME, SOBJECT, POSITION, FIELD_NAME, LABEL, SF_TYPE, LENGTH, PRECISION, SCALE,
            NILLABLE, CALCULATED, CUSTOM, REFERENCE_TO, SNOWFLAKE_TYPE, EXPORTABLE, CAPTURED_AT)
         SELECT ?, ?, f.value:position::INT, f.value:name::VARCHAR, f.value:label::VARCHAR,
@@ -118,7 +118,7 @@ def describe(session, connection_name, sobject, app):
 def extract(session, connection_name, soql, all_rows, run_id, app):
     """Run a Bulk API query and write each results page to the exports stage."""
     sf = _salesforce(session, app, connection_name)
-    stage = f"@{app}.SNOWFORCE_EXPORTS/{core.identifier('R' + run_id.replace('-', ''), 'run id')}"
+    stage = f"@{app}.GLACIER_EXPORTS/{core.identifier('R' + run_id.replace('-', ''), 'run id')}"
     columns, rows, files = None, 0, 0
     for page, count in sf.bulk_query(soql, all_rows=bool(all_rows)):
         if count == 0:
@@ -142,9 +142,9 @@ def refresh_connections(session, integration, app):
     if not _rows(session, f"SHOW INTEGRATIONS LIKE {core.sql_string(integration)}"):
         return {"skipped": f"Integration {integration} doesn't exist yet, or this role can't use it. "
                            "A Snowflake admin needs to run app/sql/20_admin_integration.sql "
-                           "(print it with: app/deploy.sh admin-sql)."}
+                           "(print it with: app/deploy.sh admin-sql integration)."}
     connections = [(c["CONNECTION_NAME"], c["SECRET_NAME"]) for c in
-                   _rows(session, f"SELECT CONNECTION_NAME, SECRET_NAME FROM {app}.SNOWFORCE_CONNECTIONS "
+                   _rows(session, f"SELECT CONNECTION_NAME, SECRET_NAME FROM {app}.GLACIER_CONNECTIONS "
                                   "ORDER BY CONNECTION_NAME")]
     for statement in core.secret_procedure_ddl(app, integration, connections):
         session.sql(statement).collect()
@@ -166,7 +166,7 @@ def save_job_task(session, job_name, app):
 # --- Caller's rights: running a job -----------------------------------------------
 
 def _job(session, app, job_name):
-    job = _one(session, f"SELECT * FROM {app}.SNOWFORCE_JOBS WHERE JOB_NAME = ?",
+    job = _one(session, f"SELECT * FROM {app}.GLACIER_JOBS WHERE JOB_NAME = ?",
                [core.identifier(job_name, "job name")])
     if job is None:
         raise core.ConfigError(f"No job named {job_name!r}")
@@ -174,12 +174,12 @@ def _job(session, app, job_name):
 
 
 class _Run:
-    """One row in SNOWFORCE_RUNS."""
+    """One row in GLACIER_RUNS."""
 
     def __init__(self, session, app, job_name, mode):
         self.session, self.app, self.run_id = session, app, str(uuid.uuid4())
         session.sql(f"""
-            INSERT INTO {app}.SNOWFORCE_RUNS (RUN_ID, JOB_NAME, MODE, STATUS, STARTED_AT, RUN_USER, RUN_ROLE)
+            INSERT INTO {app}.GLACIER_RUNS (RUN_ID, JOB_NAME, MODE, STATUS, STARTED_AT, RUN_USER, RUN_ROLE)
             SELECT ?, ?, ?, 'RUNNING', CURRENT_TIMESTAMP(), CURRENT_USER(), CURRENT_ROLE()""",
                     params=[self.run_id, job_name, mode]).collect()
 
@@ -191,7 +191,7 @@ class _Run:
                   "watermark": watermark, "soql": soql, "exported": exported, "inserted": inserted,
                   "updated": updated, "deleted": deleted}
         self.session.sql(f"""
-            UPDATE {self.app}.SNOWFORCE_RUNS r SET
+            UPDATE {self.app}.GLACIER_RUNS r SET
               STATUS = v.j:status::VARCHAR,
               FINISHED_AT = CURRENT_TIMESTAMP(),
               MODE = COALESCE(v.j:mode::VARCHAR, r.MODE),
@@ -208,11 +208,11 @@ class _Run:
 
 def _fields(session, app, connection_name, sobject):
     """The object's captured fields, describing it first if it never has been."""
-    sql = (f"SELECT * FROM {app}.SNOWFORCE_FIELDS WHERE CONNECTION_NAME = ? "
+    sql = (f"SELECT * FROM {app}.GLACIER_FIELDS WHERE CONNECTION_NAME = ? "
            "AND UPPER(SOBJECT) = UPPER(?) ORDER BY POSITION")
     fields = _rows(session, sql, [connection_name, sobject])
     if not fields:
-        session.call(f"{app}.SNOWFORCE_DESCRIBE", connection_name, sobject)
+        session.call(f"{app}.GLACIER_DESCRIBE", connection_name, sobject)
         fields = _rows(session, sql, [connection_name, sobject])
     return fields
 
@@ -232,7 +232,7 @@ def _execute(session, statements):
 
 def _last_success(session, app, job_name):
     row = _one(session, f"""
-        SELECT MAX(STARTED_AT) AS T FROM {app}.SNOWFORCE_RUNS
+        SELECT MAX(STARTED_AT) AS T FROM {app}.GLACIER_RUNS
         WHERE JOB_NAME = ? AND STATUS = 'SUCCEEDED' AND MODE IN ('sync', 'full')""", [job_name])
     t = row and row["T"]
     if t is not None and t.tzinfo is None:
@@ -252,7 +252,7 @@ def run_job(session, job_name, mode, app):
     if mode == "auto":
         mode = (job.get("NEXT_RUN_MODE") or "sync").lower()
         if job.get("NEXT_RUN_MODE"):
-            session.sql(f"UPDATE {app}.SNOWFORCE_JOBS SET NEXT_RUN_MODE = NULL WHERE JOB_NAME = ?",
+            session.sql(f"UPDATE {app}.GLACIER_JOBS SET NEXT_RUN_MODE = NULL WHERE JOB_NAME = ?",
                         params=[name]).collect()
     if mode not in core.RUN_MODES:
         raise core.ConfigError(f"Unknown mode {mode!r}; use one of {', '.join(core.RUN_MODES)}")
@@ -267,7 +267,7 @@ def run_job(session, job_name, mode, app):
         # COPY purges loaded files; this clears any left by a failure. Best effort,
         # so it can't hide the real error.
         try:
-            session.sql(f"REMOVE @{app}.SNOWFORCE_EXPORTS/R{run.run_id.replace('-', '')}/").collect()
+            session.sql(f"REMOVE @{app}.GLACIER_EXPORTS/R{run.run_id.replace('-', '')}/").collect()
         except Exception:
             pass
     run.finish("SUCCEEDED", **{k: result.get(k) for k in
@@ -301,13 +301,13 @@ def _run(session, app, job, mode, run_id):
         unknown = [f for f in chosen if f.lower() not in by_name]
         if unknown:
             raise core.ConfigError(f"Fields not on {sobject}: {', '.join(unknown)}. "
-                                   f"If they're new, CALL {app}.SNOWFORCE_DESCRIBE('{conn}', '{sobject}').")
+                                   f"If they're new, CALL {app}.GLACIER_DESCRIBE('{conn}', '{sobject}').")
         selected = [by_name[f.lower()]["FIELD_NAME"] for f in chosen]
     else:
         selected = [f["FIELD_NAME"] for f in fields if f["EXPORTABLE"]]
 
     def export(soql, all_rows):
-        return _variant(session.call(f"{app}.SNOWFORCE_EXTRACT", conn, soql, all_rows, run_id))
+        return _variant(session.call(f"{app}.GLACIER_EXTRACT", conn, soql, all_rows, run_id))
 
     if mode == "reconcile":
         return _reconcile(session, sobject, fq_table, staging["__IDS"], file_format, delete_mode, export,

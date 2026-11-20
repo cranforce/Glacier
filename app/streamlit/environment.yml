@@ -1,0 +1,9 @@
+# Packages for the Streamlit warehouse runtime, from Snowflake's Anaconda
+# channel (no external access needed). List versions with:
+#   SELECT VERSION FROM INFORMATION_SCHEMA.PACKAGES WHERE PACKAGE_NAME = 'streamlit'
+name: glacier
+channels:
+  - snowflake
+dependencies:
+  - streamlit=1.52.2
+  - snowflake-snowpark-python

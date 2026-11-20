@@ -6,7 +6,7 @@ nav_order: 2
 # Local setup
 {: .no_toc }
 
-Run Snowforce from your own machine with the `sf` and `snow` CLIs.
+Run Glacier from your own machine with the `sf` and `snow` CLIs.
 
 1. TOC
 {:toc}
@@ -18,8 +18,8 @@ Run Snowforce from your own machine with the `sf` and `snow` CLIs.
 - **Snowflake CLI** (`snow`): `brew install snowflake-cli`, or `pipx install snowflake-cli`.
 - A **Salesforce user** with API access and read access to the objects you want to sync.
 - A **Snowflake role** that can create and write tables in the target schema, and a warehouse it
-  can use. The defaults are `DS_DATA_ENGINEERING_ROLE`, `SNOWFORCE_WH`, and
-  `CRM_DB.CMILLER_SF_PLAYGROUND`.
+  can use. The defaults are `DS_DATA_ENGINEERING_ROLE`, `GLACIER_WH`, and
+  `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`.
 
 ## 1. Clone the repo
 
@@ -52,7 +52,7 @@ account = "<account identifier>"
 user = "<you>@<your domain>"
 authenticator = "externalbrowser"
 role = "DS_DATA_ENGINEERING_ROLE"
-warehouse = "SNOWFORCE_WH"
+warehouse = "GLACIER_WH"
 # Caches the SSO token, so a sync doesn't open a browser tab for every connection
 client_store_temporary_credential = true
 ```
@@ -72,8 +72,8 @@ override one setting for one run: `SNOW_WAREHOUSE=OTHER_WH ./run.sh`.
 | --- | --- | --- |
 | `SF_ORG` | `odbm-npc-prod` | `sf` org alias |
 | `SNOW_CONNECTION` | `ODBM` | `snow` connection name |
-| `SNOW_DB`, `SNOW_SCHEMA` | `CRM_DB`, `CMILLER_SF_PLAYGROUND` | Where tables are created |
-| `SNOW_ROLE`, `SNOW_WAREHOUSE` | `DS_DATA_ENGINEERING_ROLE`, `SNOWFORCE_WH` | Role and warehouse for loads |
+| `SNOW_DB`, `SNOW_SCHEMA` | `GLACIER_DB`, `NPC_SALESFORCE_PROD_RAW` | Where tables are created |
+| `SNOW_ROLE`, `SNOW_WAREHOUSE` | `DS_DATA_ENGINEERING_ROLE`, `GLACIER_WH` | Role and warehouse for loads |
 | `DELETE_MODE` | `flag` | `off`, `flag`, or `remove`; see [Deletes](how-syncing-works.md#deletes) |
 | `RECONCILE_AFTER_DAYS` | `14` | Reconcile deletes when an object hasn't synced in this many days |
 

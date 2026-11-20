@@ -1,37 +1,49 @@
-# Snowforce engine (Snowflake-native)
+# Glacier engine (Snowflake-native)
 
-Phase 1 of [docs/streamlit-app-design.md](../docs/streamlit-app-design.md): the sync engine as
-Snowflake tables, procedures, and tasks. The Streamlit UI comes next; until then, drive it with SQL
-([sql/examples.sql](sql/examples.sql)).
+Phases 1 and 2 of [docs/streamlit-app-design.md](../docs/streamlit-app-design.md): the sync engine
+as Snowflake tables, procedures, and tasks, and a Streamlit app to manage it. You can also drive it
+with SQL ([sql/examples.sql](sql/examples.sql)).
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `app.env` | Where the app lives (`CRM_DB.CMILLER_SF_PLAYGROUND`), its role, warehouse, and integration name |
+| `app.env` | Where the app lives (`GLACIER_DB.APP`), its role, warehouse, and integration name |
+| `sql/00_admin_setup.sql` | One-time admin SQL: the app's role, warehouse, database, and schema |
 | `deploy.sh` | Creates or updates everything in one Snowflake session |
 | `sql/10_objects.sql` | Config tables, stages, file format, network rule |
 | `sql/20_admin_integration.sql` | One-time admin SQL: the external access integration, plus per-run-as-user grants |
-| `sql/30_procedures.sql` | `SNOWFORCE_RUN_JOB`, `SNOWFORCE_SAVE_JOB_TASK`, `SNOWFORCE_REFRESH_CONNECTIONS` |
+| `sql/30_procedures.sql` | `GLACIER_RUN_JOB`, `GLACIER_SAVE_JOB_TASK`, `GLACIER_REFRESH_CONNECTIONS` |
+| `sql/40_streamlit.sql` | The `GLACIER_APP` Streamlit app |
 | `sql/examples.sql` | Add a connection and a job, run it, read the history |
-| `src/snowforce_core.py` | Pure logic: names, types, SOQL, load SQL, DDL |
+| `src/glacier_core.py` | Pure logic: names, types, SOQL, load SQL, DDL |
 | `src/sforce_api.py` | Salesforce client: JWT bearer login, describe, Bulk API 2.0 |
-| `src/snowforce_procs.py` | Procedure handlers |
-| `tests/` | Unit tests for the pure logic and the Salesforce client |
+| `src/glacier_procs.py` | Procedure handlers |
+| `streamlit/` | The Streamlit app: a home page, and Connections, Jobs, and Runs pages |
+| `streamlit/glacier_forms.py` | Pure logic behind the forms: validation and the save SQL |
+| `streamlit/glacier_ui.py` | Session, app schema, and reads and calls shared by the pages |
+| `streamlit/environment.yml` | The app's packages, from Snowflake's Anaconda channel |
+| `streamlit/run_local.sh` | Run the app on your machine against the deployed engine |
+| `tests/` | Unit tests for the pure logic, the Salesforce client, and the forms |
 
 ## Commands
 
 ```
-app/deploy.sh             # create or update the app
-app/deploy.sh admin-sql   # print the one-time SQL for a Snowflake admin
-app/deploy.sh render      # print the deploy SQL without running it
+app/deploy.sh                        # create or update the app
+app/deploy.sh streamlit              # update only the Streamlit app
+app/deploy.sh admin-sql setup        # one-time admin SQL, before the first deploy
+app/deploy.sh admin-sql integration  # one-time admin SQL, after the first deploy
+app/deploy.sh render                 # print the deploy SQL without running it
+app/streamlit/run_local.sh           # run the Streamlit app locally (Python 3.11, streamlit, snowpark)
 python3 -m unittest discover -s app/tests
 ```
 
 ## Before it can reach Salesforce
 
-1. **Snowflake admin** runs the output of `app/deploy.sh admin-sql` (creates
-   `SNOWFORCE_SALESFORCE_EAI`). Until then, `SNOWFORCE_REFRESH_CONNECTIONS` reports that the
+0. **Snowflake admin**, before the first deploy, runs the output of `app/deploy.sh admin-sql setup`
+   (creates the `GLACIER_DB` database, its `APP` and `NPC_SALESFORCE_PROD_RAW` schemas, `GLACIER_APP_ROLE`, and `GLACIER_WH`).
+1. **Snowflake admin**, after the first deploy, runs the output of `app/deploy.sh admin-sql integration` (creates
+   `GLACIER_SALESFORCE_EAI`). Until then, `GLACIER_REFRESH_CONNECTIONS` reports that the
    integration is missing and the Salesforce procedures don't exist.
 2. **Make a key pair** per connection (the command is in [sql/examples.sql](sql/examples.sql)).
    The certificate goes to Salesforce; the private key goes in a Snowflake secret, never in git.
@@ -41,21 +53,40 @@ python3 -m unittest discover -s app/tests
    access through a permission set. That user needs API Enabled and read access to the synced
    objects. You need the app's consumer key and the user's username.
 4. Add the connection ([sql/examples.sql](sql/examples.sql) step 1) and
-   `CALL SNOWFORCE_REFRESH_CONNECTIONS()`.
+   `CALL GLACIER_REFRESH_CONNECTIONS()`.
 
 ## Procedures
 
 | Procedure | Runs as | Does |
 | --- | --- | --- |
-| `SNOWFORCE_RUN_JOB(job, [mode])` | caller | Sync (delta), full reload, or reconcile one job; logs to `SNOWFORCE_RUNS` |
-| `SNOWFORCE_SAVE_JOB_TASK(job)` | owner | Create or replace the job's task from its `SNOWFORCE_JOBS` row |
-| `SNOWFORCE_REFRESH_CONNECTIONS()` | owner | Re-create the Salesforce procedures with every connection's secret |
-| `SNOWFORCE_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
-| `SNOWFORCE_LIST_OBJECTS(conn)` | owner | Queryable objects, for picking one |
-| `SNOWFORCE_DESCRIBE(conn, object)` | owner | Capture fields into `SNOWFORCE_FIELDS` |
-| `SNOWFORCE_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `SNOWFORCE_EXPORTS` stage |
+| `GLACIER_RUN_JOB(job, [mode])` | caller | Sync (delta), full reload, or reconcile one job; logs to `GLACIER_RUNS` |
+| `GLACIER_SAVE_JOB_TASK(job)` | owner | Create or replace the job's task from its `GLACIER_JOBS` row |
+| `GLACIER_REFRESH_CONNECTIONS()` | owner | Re-create the Salesforce procedures with every connection's secret |
+| `GLACIER_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
+| `GLACIER_LIST_OBJECTS(conn)` | owner | Queryable objects, for picking one |
+| `GLACIER_DESCRIBE(conn, object)` | owner | Capture fields into `GLACIER_FIELDS` |
+| `GLACIER_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
 
 The last four exist only once the integration does.
+
+## Streamlit app
+
+`deploy.sh` creates `GLACIER_APP` in the app schema; open it from Snowsight under
+**Projects > Streamlit**. It runs with its owner's rights, as the app role, and does everything
+through the tables and procedures above:
+
+| Page | Does |
+| --- | --- |
+| Connections | Add or edit a connection (creates its secret from the pasted private key, then calls `GLACIER_REFRESH_CONNECTIONS`), test it, remove it |
+| Jobs | Create or edit a job: pick the object and fields from Salesforce, the destination, deletes, history, schedule, and run-as user and role. Saving writes the `GLACIER_JOBS` row and calls `GLACIER_SAVE_JOB_TASK` |
+| Runs | `GLACIER_RUNS` history, and Run now, Full reload, and Reconcile |
+
+The app can't run as another user, so its run buttons start the job's task (`EXECUTE TASK`),
+which runs as the job's user, role, and warehouse. A full reload or reconcile sets the job's
+`NEXT_RUN_MODE` first. Starting tasks needs the account-level `EXECUTE TASK` privilege.
+
+The app imports `glacier_core.py` for validation; `deploy.sh` uploads a copy next to the app,
+and locally it's read from `src/`.
 
 ## History
 

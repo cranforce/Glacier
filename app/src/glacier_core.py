@@ -1,7 +1,7 @@
-"""Pure Snowforce logic: names, column types, SOQL, and the load SQL.
+"""Pure Glacier logic: names, column types, SOQL, and the load SQL.
 
 Nothing here talks to Snowflake or Salesforce, so it can be unit tested
-locally. The stored procedures in snowforce_procs.py run the SQL built here.
+locally. The stored procedures in glacier_procs.py run the SQL built here.
 """
 import re
 from datetime import timedelta
@@ -34,7 +34,7 @@ USER_NAME = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 CRON = re.compile(r"^[0-9A-Za-z*/,_ -]+$")
 
 # Python files every procedure imports from the code stage
-CODE_FILES = ("snowforce_core.py", "sforce_api.py", "snowforce_procs.py")
+CODE_FILES = ("glacier_core.py", "sforce_api.py", "glacier_procs.py")
 PACKAGES = "('snowflake-snowpark-python', 'requests', 'cryptography')"
 
 
@@ -354,16 +354,16 @@ def watermark_sql(fq_table, data_type):
 
 # Procedures that read connection secrets: (name, arguments, returns, handler)
 SECRET_PROCEDURES = (
-    ("SNOWFORCE_TEST_CONNECTION", "CONNECTION_NAME VARCHAR", "VARIANT", "test_connection"),
-    ("SNOWFORCE_LIST_OBJECTS", "CONNECTION_NAME VARCHAR", "VARIANT", "list_objects"),
-    ("SNOWFORCE_DESCRIBE", "CONNECTION_NAME VARCHAR, SOBJECT VARCHAR", "VARIANT", "describe"),
-    ("SNOWFORCE_EXTRACT",
+    ("GLACIER_TEST_CONNECTION", "CONNECTION_NAME VARCHAR", "VARIANT", "test_connection"),
+    ("GLACIER_LIST_OBJECTS", "CONNECTION_NAME VARCHAR", "VARIANT", "list_objects"),
+    ("GLACIER_DESCRIBE", "CONNECTION_NAME VARCHAR, SOBJECT VARCHAR", "VARIANT", "describe"),
+    ("GLACIER_EXTRACT",
      "CONNECTION_NAME VARCHAR, SOQL VARCHAR, ALL_ROWS BOOLEAN, RUN_ID VARCHAR", "VARIANT", "extract"),
 )
 
 
 def imports_clause(app):
-    return "(" + ", ".join(f"'@{app}.SNOWFORCE_CODE/{f}'" for f in CODE_FILES) + ")"
+    return "(" + ", ".join(f"'@{app}.GLACIER_CODE/{f}'" for f in CODE_FILES) + ")"
 
 
 def secret_procedure_ddl(app, integration, connections):
@@ -383,7 +383,7 @@ def secret_procedure_ddl(app, integration, connections):
             "  RUNTIME_VERSION = '3.11'\n"
             f"  PACKAGES = {PACKAGES}\n"
             f"  IMPORTS = {imports_clause(app)}\n"
-            f"  HANDLER = 'snowforce_procs.{handler}'\n"
+            f"  HANDLER = 'glacier_procs.{handler}'\n"
             f"  EXTERNAL_ACCESS_INTEGRATIONS = ({integration})\n"
             + (f"  SECRETS = ({secrets})\n" if secrets else "")
             + "  EXECUTE AS OWNER")
@@ -391,7 +391,7 @@ def secret_procedure_ddl(app, integration, connections):
 
 
 def task_name(app, job_name):
-    return f"{app}.SNOWFORCE_JOB_{identifier(job_name, 'job name')}"
+    return f"{app}.GLACIER_JOB_{identifier(job_name, 'job name')}"
 
 
 def task_ddl(app, owner_role, job):
@@ -416,10 +416,10 @@ def task_ddl(app, owner_role, job):
         lines.append(f"  SCHEDULE = {sql_string('USING CRON ' + schedule)}")
     if user:
         lines.append(f"  EXECUTE AS USER {user_identifier(user)}")
-    lines.append(f"  COMMENT = {sql_string('Snowforce job ' + name)}")
+    lines.append(f"  COMMENT = {sql_string('Glacier job ' + name)}")
     body = []
     if user and role:
         body.append(f"  USE ROLE {role};")
-    body.append(f"  CALL {app}.SNOWFORCE_RUN_JOB({sql_string(name)});")
+    body.append(f"  CALL {app}.GLACIER_RUN_JOB({sql_string(name)});")
     lines.append("AS\nEXECUTE IMMEDIATE $$\nBEGIN\n" + "\n".join(body) + "\nEND;\n$$")
     return "\n".join(lines)

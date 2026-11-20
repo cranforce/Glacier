@@ -1,16 +1,16 @@
 -- One-time setup for a Snowflake admin (ACCOUNTADMIN, or a role with
--- CREATE INTEGRATION). Run after deploy.sh has created the network rule.
--- Print a filled-in copy with:  app/deploy.sh admin-sql
+-- CREATE INTEGRATION). Run after the first deploy.sh, which creates the network rule.
+-- Print a filled-in copy with:  app/deploy.sh admin-sql integration
 
 USE ROLE ACCOUNTADMIN;
 
--- Lets the Snowforce procedures reach Salesforce. ALLOWED_AUTHENTICATION_SECRETS
+-- Lets the Glacier procedures reach Salesforce. ALLOWED_AUTHENTICATION_SECRETS
 -- = ALL means adding a connection needs no admin; only {{APP_ROLE}} can use it.
 CREATE EXTERNAL ACCESS INTEGRATION IF NOT EXISTS {{APP_INTEGRATION}}
-  ALLOWED_NETWORK_RULES = ({{APP}}.SNOWFORCE_SALESFORCE_EGRESS)
+  ALLOWED_NETWORK_RULES = ({{APP}}.GLACIER_SALESFORCE_EGRESS)
   ALLOWED_AUTHENTICATION_SECRETS = ALL
   ENABLED = TRUE
-  COMMENT = 'Snowforce: Salesforce Bulk API access';
+  COMMENT = 'Glacier: Salesforce Bulk API access';
 
 GRANT USAGE ON INTEGRATION {{APP_INTEGRATION}} TO ROLE {{APP_ROLE}};
 

@@ -6,7 +6,7 @@ nav_order: 3
 # Snowflake setup
 {: .no_toc }
 
-Deploy the Snowforce engine into Snowflake and connect it to a Salesforce org. Once this is done,
+Deploy the Glacier engine into Snowflake and connect it to a Salesforce org. Once this is done,
 [create jobs](jobs.md) to sync objects.
 
 1. TOC
@@ -16,21 +16,22 @@ Deploy the Snowforce engine into Snowflake and connect it to a Salesforce org. O
 
 ```mermaid
 flowchart LR
-  TASK["Task per job"] -- "CALL" --> RUN["SNOWFORCE_RUN_JOB<br/>caller's rights"]
-  RUN -- "CALL" --> EXT["SNOWFORCE_EXTRACT<br/>owner's rights"]
+  TASK["Task per job"] -- "CALL" --> RUN["GLACIER_RUN_JOB<br/>caller's rights"]
+  RUN -- "CALL" --> EXT["GLACIER_EXTRACT<br/>owner's rights"]
   SEC["Secret per connection"] -.-> EXT
   EXT -- "Bulk API 2.0<br/>via the integration" --> SF["Salesforce"]
-  EXT -- "CSV parts" --> STG[("SNOWFORCE_EXPORTS stage")]
+  EXT -- "CSV parts" --> STG[("GLACIER_EXPORTS stage")]
   STG -- "COPY + MERGE" --> RUN
   RUN -- "as the job's role" --> DEST[("Target table")]
-  RUN -- "log" --> RUNS[("SNOWFORCE_RUNS")]
+  RUN -- "log" --> RUNS[("GLACIER_RUNS")]
 ```
 
-Only the owner's-rights procedures can read the Salesforce secrets. `SNOWFORCE_RUN_JOB` runs as
+Only the owner's-rights procedures can read the Salesforce secrets. `GLACIER_RUN_JOB` runs as
 the job's role, so a job can only write where that role can write.
 
 | Step | Who | How often |
 | --- | --- | --- |
+| [Create the app's home](#1-configure-the-app) | Snowflake admin | Once |
 | [Deploy the app](#2-deploy-the-app) | You, as the app role | Once, then after every code change |
 | [Create the external access integration](#3-create-the-external-access-integration) | Snowflake admin | Once |
 | [Make a key pair](#4-make-a-key-pair) | You | Per connection |
@@ -40,8 +41,8 @@ the job's role, so a job can only write where that role can write.
 ## Prerequisites
 
 - The **Snowflake CLI** with a working connection; see [Local setup, step 3](local-setup.md#3-add-a-snowflake-connection).
-- An **app role** that can create tables, stages, file formats, network rules, procedures, and
-  tasks in the app schema, and can use its warehouse.
+- The **app role** granted to you (`GRANT ROLE GLACIER_APP_ROLE TO USER <you>`), once an admin
+  has created it in step 1.
 - To run the unit tests: Python 3.11 with `requests` and `cryptography`.
 
 ## 1. Configure the app
@@ -50,14 +51,24 @@ the job's role, so a job can only write where that role can write.
 
 | Setting | Current value | What it is |
 | --- | --- | --- |
-| `APP_DB`, `APP_SCHEMA` | `CRM_DB`, `CMILLER_SF_PLAYGROUND` | Schema for every app object (all prefixed `SNOWFORCE_`) |
-| `APP_ROLE` | `DS_DATA_ENGINEERING_ROLE` | Owns the app objects and tasks |
-| `APP_WAREHOUSE` | `SNOWFORCE_WH` | Warehouse used to deploy |
-| `APP_INTEGRATION` | `SNOWFORCE_SALESFORCE_EAI` | External access integration the admin creates |
+| `APP_DB`, `APP_SCHEMA` | `GLACIER_DB`, `APP` | The app's own database and schema (every object is prefixed `GLACIER_`) |
+| `APP_ROLE` | `GLACIER_APP_ROLE` | Owns the app schema, its objects, and the job tasks |
+| `APP_WAREHOUSE` | `GLACIER_WH` | Warehouse for deploys, the Streamlit app, and job runs |
+| `APP_INTEGRATION` | `GLACIER_SALESFORCE_EAI` | External access integration the admin creates |
 | `SNOW_CONNECTION` | `ODBM` | `snow` connection used to deploy |
 
-Moving the app to a dedicated schema and role later means changing these, re-running
-`deploy.sh`, and adding the connections again. See
+The database, schema, role, and warehouse are created once by a Snowflake admin. Print the SQL
+and send it to them:
+
+```sh
+app/deploy.sh admin-sql setup
+```
+
+It creates the role (granted to `SYSADMIN`), an extra-small warehouse, the database, and the
+schema, which the app role owns. It also creates `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`, the default
+destination for Salesforce data, also owned by the app role, and grants the account-level
+`EXECUTE TASK` the app's run buttons need. Other roles that load data there, such as the local
+CLI's role, need the commented grants at the end. See
 [Where the app lives](streamlit-app-design.md#where-the-app-lives).
 
 ## 2. Deploy the app
@@ -67,10 +78,11 @@ app/deploy.sh          # create or update everything, in one Snowflake session
 app/deploy.sh render   # print the SQL instead of running it
 ```
 
-This creates the config tables (`SNOWFORCE_CONNECTIONS`, `SNOWFORCE_JOBS`, `SNOWFORCE_RUNS`,
-`SNOWFORCE_FIELDS`), the code and exports stages, the CSV file format, and the
-`SNOWFORCE_SALESFORCE_EGRESS` network rule. It uploads the Python code in `app/src/` and creates
-the procedures.
+This creates the config tables (`GLACIER_CONNECTIONS`, `GLACIER_JOBS`, `GLACIER_RUNS`,
+`GLACIER_FIELDS`), the code and exports stages, the CSV file format, and the
+`GLACIER_SALESFORCE_EGRESS` network rule. It uploads the Python code in `app/src/`, creates
+the procedures, and creates the `GLACIER_APP` Streamlit app (`app/deploy.sh streamlit` updates
+only the app).
 
 Tables are only created if missing, so re-deploying keeps your connections, jobs, and run
 history. Re-run it whenever `app/src/` or `app/sql/` changes.
@@ -87,29 +99,29 @@ This needs `ACCOUNTADMIN` or a role with `CREATE INTEGRATION`, and the network r
 Print the SQL and send it to a Snowflake admin:
 
 ```sh
-app/deploy.sh admin-sql
+app/deploy.sh admin-sql integration
 ```
 
-It creates `SNOWFORCE_SALESFORCE_EAI`, which lets the procedures reach `login.salesforce.com`,
+It creates `GLACIER_SALESFORCE_EAI`, which lets the procedures reach `login.salesforce.com`,
 `test.salesforce.com`, `*.my.salesforce.com`, and `*.sandbox.my.salesforce.com`, and grants its
 use to the app role. It allows every secret, so adding a connection later needs no admin.
 
-Until it exists, `SNOWFORCE_REFRESH_CONNECTIONS` reports that the integration is missing, and the
+Until it exists, `GLACIER_REFRESH_CONNECTIONS` reports that the integration is missing, and the
 procedures that talk to Salesforce aren't created.
 
 The same file has the per-user grants needed for jobs that [run as a user](jobs.md#run-as-a-user-and-role).
 
 ## 4. Make a key pair
 
-Snowforce logs in to Salesforce with the OAuth 2.0 JWT bearer flow: Salesforce holds a
+Glacier logs in to Salesforce with the OAuth 2.0 JWT bearer flow: Salesforce holds a
 certificate, and Snowflake holds the matching private key. Make one pair per connection:
 
 ```sh
-openssl req -x509 -newkey rsa:2048 -nodes -days 730 -subj "/CN=Snowforce" \
-  -keyout snowforce.key -out snowforce.crt
+openssl req -x509 -newkey rsa:2048 -nodes -days 730 -subj "/CN=Glacier" \
+  -keyout glacier.key -out glacier.crt
 ```
 
-`snowforce.crt` goes to the Salesforce admin (step 5). `snowforce.key` goes into a Snowflake
+`glacier.crt` goes to the Salesforce admin (step 5). `glacier.key` goes into a Snowflake
 secret (step 6). Never commit either; `.gitignore` excludes `*.key` and `*.crt`. Delete the local
 key once the secret exists.
 
@@ -122,7 +134,7 @@ A Salesforce admin does this once per org:
 
 1. Create an **External Client App** with OAuth enabled and the `api` and `refresh_token`
    scopes.
-2. Enable the **JWT bearer flow** and upload `snowforce.crt`.
+2. Enable the **JWT bearer flow** and upload `glacier.crt`.
 3. Under the app's policies, set **Admin approved users are pre-authorized**.
 4. Give the **integration user** access to the app through a permission set. That user needs
    **API Enabled** and read access to every object you'll sync.
@@ -130,26 +142,26 @@ A Salesforce admin does this once per org:
 
 ## 6. Add the connection
 
-As the app role, create a secret with the private key, then a row in `SNOWFORCE_CONNECTIONS`.
+As the app role, create a secret with the private key, then a row in `GLACIER_CONNECTIONS`.
 Paste the whole key, `BEGIN` and `END` lines included. Snowflake masks secret values in query
 history.
 
 ```sql
-USE ROLE DS_DATA_ENGINEERING_ROLE;
-USE WAREHOUSE SNOWFORCE_WH;
-USE SCHEMA CRM_DB.CMILLER_SF_PLAYGROUND;
+USE ROLE GLACIER_APP_ROLE;
+USE WAREHOUSE GLACIER_WH;
+USE SCHEMA GLACIER_DB.APP;
 
-CREATE OR REPLACE SECRET SNOWFORCE_SECRET_ODBM_PROD
+CREATE OR REPLACE SECRET GLACIER_SECRET_ODBM_PROD
   TYPE = GENERIC_STRING
   SECRET_STRING = '-----BEGIN PRIVATE KEY-----
 ...
 -----END PRIVATE KEY-----';
 
-INSERT INTO SNOWFORCE_CONNECTIONS
+INSERT INTO GLACIER_CONNECTIONS
   (CONNECTION_NAME, MY_DOMAIN_URL, CLIENT_ID, USERNAME, SECRET_NAME, DESCRIPTION)
 VALUES ('ODBM_PROD', 'https://ourdailybreadministries.my.salesforce.com',
         '<consumer key>', '<integration user username>',
-        'CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_SECRET_ODBM_PROD', 'Production org');
+        'GLACIER_DB.APP.GLACIER_SECRET_ODBM_PROD', 'Production org');
 ```
 
 | Column | Notes |
@@ -164,24 +176,24 @@ VALUES ('ODBM_PROD', 'https://ourdailybreadministries.my.salesforce.com',
 Then re-create the Salesforce procedures so they can read the new secret, and test the login:
 
 ```sql
-CALL SNOWFORCE_REFRESH_CONNECTIONS();
-CALL SNOWFORCE_TEST_CONNECTION('ODBM_PROD');   -- returns the instance URL and a count of objects
+CALL GLACIER_REFRESH_CONNECTIONS();
+CALL GLACIER_TEST_CONNECTION('ODBM_PROD');   -- returns the instance URL and a count of objects
 ```
 
-Call `SNOWFORCE_REFRESH_CONNECTIONS()` after every connection you add or remove: a procedure's
+Call `GLACIER_REFRESH_CONNECTIONS()` after every connection you add or remove: a procedure's
 secrets are fixed when it's created. `deploy.sh` calls it too.
 
 ## Procedures
 
 | Procedure | Runs as | Does |
 | --- | --- | --- |
-| `SNOWFORCE_RUN_JOB(job, [mode])` | caller | Sync, full reload, or reconcile one job; logs to `SNOWFORCE_RUNS` |
-| `SNOWFORCE_SAVE_JOB_TASK(job)` | owner | Create or replace the job's task from its `SNOWFORCE_JOBS` row |
-| `SNOWFORCE_REFRESH_CONNECTIONS()` | owner | Re-create the Salesforce procedures with every connection's secret |
-| `SNOWFORCE_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
-| `SNOWFORCE_LIST_OBJECTS(conn)` | owner | List queryable objects |
-| `SNOWFORCE_DESCRIBE(conn, object)` | owner | Capture an object's fields into `SNOWFORCE_FIELDS` |
-| `SNOWFORCE_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `SNOWFORCE_EXPORTS` stage |
+| `GLACIER_RUN_JOB(job, [mode])` | caller | Sync, full reload, or reconcile one job; logs to `GLACIER_RUNS` |
+| `GLACIER_SAVE_JOB_TASK(job)` | owner | Create or replace the job's task from its `GLACIER_JOBS` row |
+| `GLACIER_REFRESH_CONNECTIONS()` | owner | Re-create the Salesforce procedures with every connection's secret |
+| `GLACIER_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
+| `GLACIER_LIST_OBJECTS(conn)` | owner | List queryable objects |
+| `GLACIER_DESCRIBE(conn, object)` | owner | Capture an object's fields into `GLACIER_FIELDS` |
+| `GLACIER_EXTRACT(conn, soql, all_rows, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
 
 The last four exist only once the integration does.
 
@@ -191,15 +203,15 @@ Before the certificate expires:
 
 1. Make a new key pair (step 4).
 2. Have the Salesforce admin upload the new certificate to the External Client App.
-3. Replace the secret with the new key: `CREATE OR REPLACE SECRET SNOWFORCE_SECRET_ODBM_PROD ...`.
-4. `CALL SNOWFORCE_REFRESH_CONNECTIONS();` then `CALL SNOWFORCE_TEST_CONNECTION('ODBM_PROD');`
+3. Replace the secret with the new key: `CREATE OR REPLACE SECRET GLACIER_SECRET_ODBM_PROD ...`.
+4. `CALL GLACIER_REFRESH_CONNECTIONS();` then `CALL GLACIER_TEST_CONNECTION('ODBM_PROD');`
 
 ## Troubleshooting
 
 | Message | Fix |
 | --- | --- |
-| `Integration SNOWFORCE_SALESFORCE_EAI doesn't exist yet, or this role can't use it` | Step 3 hasn't been done, or the grant to the app role is missing |
-| `Connection X has no usable secret` | Call `SNOWFORCE_REFRESH_CONNECTIONS()`; check `SECRET_NAME` and that the app role can use the secret |
+| `Integration GLACIER_SALESFORCE_EAI doesn't exist yet, or this role can't use it` | Step 3 hasn't been done, or the grant to the app role is missing |
+| `Connection X has no usable secret` | Call `GLACIER_REFRESH_CONNECTIONS()`; check `SECRET_NAME` and that the app role can use the secret |
 | `Connection X has no CLIENT_ID` (or `USERNAME`) | Fill in the column on the connection row |
-| Unknown procedure `SNOWFORCE_TEST_CONNECTION` | The integration is missing (step 3), or `SNOWFORCE_REFRESH_CONNECTIONS()` hasn't run since |
+| Unknown procedure `GLACIER_TEST_CONNECTION` | The integration is missing (step 3), or `GLACIER_REFRESH_CONNECTIONS()` hasn't run since |
 | Salesforce login errors | Check the certificate is uploaded, the user is pre-authorized through the permission set, and the consumer key and username match |
