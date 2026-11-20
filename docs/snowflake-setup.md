@@ -69,8 +69,9 @@ app/deploy.sh render   # print the SQL instead of running it
 
 This creates the config tables (`SNOWFORCE_CONNECTIONS`, `SNOWFORCE_JOBS`, `SNOWFORCE_RUNS`,
 `SNOWFORCE_FIELDS`), the code and exports stages, the CSV file format, and the
-`SNOWFORCE_SALESFORCE_EGRESS` network rule. It uploads the Python code in `app/src/` and creates
-the procedures.
+`SNOWFORCE_SALESFORCE_EGRESS` network rule. It uploads the Python code in `app/src/`, creates
+the procedures, and creates the `SNOWFORCE_APP` Streamlit app (`app/deploy.sh streamlit` updates
+only the app).
 
 Tables are only created if missing, so re-deploying keeps your connections, jobs, and run
 history. Re-run it whenever `app/src/` or `app/sql/` changes.

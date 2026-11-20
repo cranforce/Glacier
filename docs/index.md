@@ -18,7 +18,7 @@ exports only the records that changed since the last one (by `SystemModstamp`), 
 | Configured in | `project.env` and `objects.conf` | The `SNOWFORCE_CONNECTIONS` and `SNOWFORCE_JOBS` tables |
 | Scheduling | Whatever runs `./run.sh` | A Snowflake task per job |
 | Run history | `state/` folder | `SNOWFORCE_RUNS` table |
-| Status | In use | Phase 1 of the [Streamlit app design](streamlit-app-design.md): engine built, driven by SQL; no UI yet |
+| Status | In use | Phases 1 and 2 of the [Streamlit app design](streamlit-app-design.md): engine built, managed by SQL or a Streamlit app (early) |
 
 Both load tables the same way, so the [sync rules](how-syncing-works.md) apply to either.
 

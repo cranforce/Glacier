@@ -7,8 +7,9 @@ nav_order: 4
 {: .no_toc }
 
 A job syncs one Salesforce object into one Snowflake table. It's a row in `SNOWFORCE_JOBS`, and
-when it's scheduled, a task named `SNOWFORCE_JOB_<JOB_NAME>`. Until the Streamlit app exists, you
-manage jobs with SQL.
+when it's scheduled, a task named `SNOWFORCE_JOB_<JOB_NAME>`. You can manage jobs in the
+`SNOWFORCE_APP` Streamlit app (see `app/README.md`), or with the SQL below; both use the same
+tables and procedures.
 
 This assumes [Snowflake setup](snowflake-setup.md) is done and you have a working connection.
 The examples use the current app schema and role:
