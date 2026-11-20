@@ -6,7 +6,7 @@
 CREATE OR REPLACE STREAMLIT {{APP}}.SNOWFORCE_APP
   FROM '@{{APP}}.SNOWFORCE_CODE/streamlit'
   MAIN_FILE = 'streamlit_app.py'
-  -- The container runtime installs streamlit and snowflake-snowpark-python itself
+  -- The container runtime installs the packages in pyproject.toml
   RUNTIME_NAME = 'SYSTEM$ST_CONTAINER_RUNTIME_PY3_11'
   COMPUTE_POOL = SYSTEM_COMPUTE_POOL_CPU
   QUERY_WAREHOUSE = {{APP_WAREHOUSE}}
