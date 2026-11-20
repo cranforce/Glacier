@@ -63,7 +63,7 @@ and send it to them:
 app/deploy.sh admin-sql setup
 ```
 
-It creates the role (granted to `SYSADMIN`), an extra-small warehouse, the database, and the
+It creates the role (granted to `SYSADMIN`), a small warehouse, the database, and the
 schema, which the app role owns. It also creates `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`, the default
 destination for Salesforce data, also owned by the app role, and grants the account-level
 `EXECUTE TASK` the app's run buttons need. Other roles that load data there, such as the local
