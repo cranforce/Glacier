@@ -20,13 +20,14 @@ in Snowflake). Text fields such as postal codes stay `VARCHAR`, and datetimes lo
 
 ## Delta sync
 
-A sync reads `MAX(SYSTEMMODSTAMP)` from the table, exports records with
-`SystemModstamp >= <that time>`, and `MERGE`s them on `ID`. Records at the boundary second are
+A sync reads the table's latest `SystemModstamp` (`MAX(SYSTEM_MODSTAMP)`; see
+[Column names](#column-names)), exports records with `SystemModstamp >= <that time>`, and
+`MERGE`s them on `ID`. Records at the boundary second are
 fetched again and merged harmlessly. `Id` and `SystemModstamp` are always exported, even if the
 field list leaves them out.
 
 A sync does a **full load** instead when the table doesn't exist, is empty, or has no
-`SYSTEMMODSTAMP` column.
+`SystemModstamp` column.
 
 ## New fields
 
@@ -44,7 +45,7 @@ The delete mode controls what happens to records deleted in Salesforce:
 
 | Mode | Effect |
 | --- | --- |
-| `flag` (default) | The row stays, with `ISDELETED = TRUE`. Filter with `WHERE NOT ISDELETED`. |
+| `flag` (default) | The row stays, with `IS_DELETED = TRUE` (`ISDELETED` from the CLI). Filter with `WHERE NOT IS_DELETED`. |
 | `remove` | The row is deleted from the Snowflake table. |
 | `off` | Deletes are ignored. |
 
@@ -99,7 +100,7 @@ same columns, plus `VALID_FROM`, `VALID_TO`, and `IS_CURRENT`.
   don't make new versions.
 - History records each record's state at each sync. Several edits between two syncs become one
   version.
-- Deletes seen in the recycle bin become a version with `ISDELETED = TRUE`, in `remove` mode
+- Deletes seen in the recycle bin become a version with `IsDeleted` true, in `remove` mode
   too, so history keeps records the table drops. Records gone from Salesforce entirely (found by
   reconcile or a full reload) get their current version closed with no new one.
 - A full reload replaces the table but not its history: changed records get new versions and
@@ -111,10 +112,24 @@ same columns, plus `VALID_FROM`, `VALID_TO`, and `IS_CURRENT`.
 ## Table names
 
 Locally, you name each table in `objects.conf`. In Snowflake, a job's `TARGET_TABLE` defaults to
-the object's API name uppercased (`GiftTransaction` → `GIFTTRANSACTION`, `Subscription__c` →
-`SUBSCRIPTION__C`). To keep loading a table the CLI created under another name, such as
-`SUBSCRIPTION`, set it as the job's `TARGET_TABLE`; otherwise the first run does a full load into
-the new name.
+the object's API name in the [Snowflake convention](#column-names) (`GiftTransaction` →
+`GIFT_TRANSACTION`, `Subscription__c` → `SUBSCRIPTION_C`). To keep loading a table the CLI
+created under another name, such as `SUBSCRIPTION`, set it as the job's `TARGET_TABLE`; otherwise
+the first run does a full load into the new name.
 
 Reserved words keep their name and are double-quoted in SQL (`Order` → `"ORDER"`), so queries
 against those tables need the quotes too.
+
+## Column names
+
+Snowflake jobs name tables and columns after Salesforce's API names:
+
+- PascalCase splits at each case change: `GiftTransaction` → `GIFT_TRANSACTION`,
+  `SystemModstamp` → `SYSTEM_MODSTAMP`, `ExternalID__c` → `EXTERNAL_ID_C`.
+- A custom name's `__c` loses an underscore: `Financial_Batch__c` → `FINANCIAL_BATCH_C`. A
+  namespace's `__` stays (`npsp__Batch__c` → `NPSP__BATCH_C`).
+- A relationship field's dots become underscores: `Account.Name` → `ACCOUNT_NAME`.
+
+Two fields that come out the same (`Foo_Bar__c` and `FooBar__c`) fail the export; leave one out
+of the job's fields. The CLI only uppercases (`SYSTEMMODSTAMP`, `FINANCIAL_BATCH__C`), so its
+tables don't mix with the app's.

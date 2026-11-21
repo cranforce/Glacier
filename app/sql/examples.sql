@@ -41,7 +41,7 @@ ORDER BY POSITION;
 
 -- 3. Add a job --------------------------------------------------------------------
 -- FIELDS NULL means every exportable field. TARGET_TABLE NULL means the object
--- name (SUBSCRIPTION__C here); set it to keep loading an existing table.
+-- name (SUBSCRIPTION_C here); set it to keep loading an existing table.
 INSERT INTO GLACIER_JOBS
   (JOB_NAME, CONNECTION_NAME, SOURCE_OBJECT, FIELDS, TARGET_DATABASE, TARGET_SCHEMA, TARGET_TABLE,
    DELETE_MODE, WAREHOUSE, SCHEDULE)

@@ -13,8 +13,9 @@ Run Glacier entirely inside Snowflake, managed from a Streamlit app, with:
 
 - **Multiple Salesforce connections** (orgs, sandboxes), each with its own credentials.
 - **Any Salesforce object** imported into a **destination database, schema, and table chosen per
-  job**. The table name defaults to the object's API name uppercased (`GiftTransaction` →
-  `GIFTTRANSACTION`, `Subscription__c` → `SUBSCRIPTION__C`) and can be changed. Snowflake reserved
+  job**. The table name defaults to the object's API name, split at case changes with `__c`
+  shortened (`GiftTransaction` → `GIFT_TRANSACTION`, `Subscription__c` → `SUBSCRIPTION_C`), and
+  can be changed. Columns follow the same convention. Snowflake reserved
   words keep their name and are double-quoted in SQL (`Order` → `"ORDER"`), so queries against
   those tables need the quotes too.
 - **Per-job choice of Snowflake user, role, and warehouse** that the load runs as.
@@ -170,7 +171,7 @@ consumer key.
 
 ## Differences from the CLI
 
-- **Table names default to the object name** (`SUBSCRIPTION__C`, `GIFTTRANSACTION`). To keep loading
+- **Table names default to the object name** (`SUBSCRIPTION_C`, `GIFT_TRANSACTION`). To keep loading
   an existing table such as `SUBSCRIPTION`, set it as the job's table; otherwise the first run
   does a full load into the new name.
 - **No local files.** Exports go to a Snowflake stage, not `$TMPDIR`, and schema and run state

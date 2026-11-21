@@ -6,11 +6,15 @@ A connector is a module that provides:
   KEYS                glacier_core.RecordKeys: the key, change, and deleted fields
   DELETE_MODES        The delete modes it supports (all of them when it reports deletes)
   SETTINGS            glacier_core.Setting per connection setting, stored in SETTINGS
-  SECRET_LABEL, SECRET_PLACEHOLDER, OBJECT_PLACEHOLDER, FIELDS_HELP, UNEXPORTABLE_NOTE
+  SECRET_LABEL, SECRET_PLACEHOLDER, OBJECT_PLACEHOLDER, FIELDS_HELP, UNEXPORTABLE_NOTE,
+  TABLE_NAME_HELP
                       Text for the Streamlit forms
   validate_settings(values) -> settings
   validate_secret(text) -> secret value
   object_name(name), field_name(name) -> the name, validated
+  table_name(object) -> the default Snowflake table for an object
+  column_name(field) -> the Snowflake column for a field (core.column_name
+                      uppercases; KEYS.column should be the same function)
   build_query(object, fields, since, extra_fields) -> the query an export runs
   build_ids_query(object) -> a query exporting only the key, for reconcile
   query_columns(query) -> columns, for an export with no rows

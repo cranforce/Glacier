@@ -61,28 +61,33 @@ class RecordKeys:
     is the delta watermark and a history version's VALID_FROM. deleted is a
     boolean deleted flag, or None if the source doesn't report deletes in its
     data. untracked fields change without the record changing, so history
-    ignores them (as it does change).
+    ignores them (as it does change). column turns a field into its Snowflake
+    column, as the connector names columns.
     """
     key: str
     change: str
     deleted: str = None
     untracked: tuple = ()
+    column: object = None
+
+    def col(self, field):
+        return (self.column or column_name)(field)
 
     @property
     def key_col(self):
-        return column_name(self.key)
+        return self.col(self.key)
 
     @property
     def change_col(self):
-        return column_name(self.change)
+        return self.col(self.change)
 
     @property
     def deleted_col(self):
-        return column_name(self.deleted) if self.deleted else None
+        return self.col(self.deleted) if self.deleted else None
 
     @property
     def untracked_cols(self):
-        return frozenset({self.change_col, *(column_name(f) for f in self.untracked)})
+        return frozenset({self.change_col, *(self.col(f) for f in self.untracked)})
 
 
 # --- Names ------------------------------------------------------------------
@@ -106,11 +111,6 @@ def table_ref(database, schema, table):
     return f"{identifier(database, 'database')}.{identifier(schema, 'schema')}.{quoted}"
 
 
-def default_table_name(source_object):
-    """The source object's name uppercased (Order -> ORDER)."""
-    return identifier(source_object, "object name")
-
-
 def user_identifier(name):
     """A Snowflake user name, double-quoted because names like a.b@c.org need it."""
     if not name or not USER_NAME.match(name):
@@ -131,13 +131,22 @@ def sql_string(value):
 # --- Columns -------------------------------------------------------------------
 
 def column_name(field_name):
-    """Snowflake column for a source field (Account.Name -> ACCOUNT_NAME)."""
+    """Snowflake column for a source field, uppercased (Account.Name -> ACCOUNT_NAME).
+    A connector with its own convention passes its column function instead."""
     return field_name.strip().strip('"').upper().replace(".", "_")
 
 
-def normalize_header(line):
+def normalize_header(line, column=column_name):
     """Turn an export's CSV header line into Snowflake column names."""
-    return [column_name(f) for f in line.rstrip("\r\n").split(",")]
+    fields = [f.strip().strip('"') for f in line.rstrip("\r\n").split(",")]
+    columns = [column(f) for f in fields]
+    seen = {}
+    for f, c in zip(fields, columns):
+        if c in seen:
+            raise ConfigError(f"Fields {seen[c]} and {f} would both be column {c}; "
+                              "leave one out of the job's fields")
+        seen[c] = f
+    return columns
 
 
 # --- Runs ----------------------------------------------------------------------

@@ -110,7 +110,7 @@ def extract(session, connection_name, query, include_deleted, run_id, connector,
         if count == 0:
             continue
         first, _, rest = page.partition(b"\n")
-        header = core.normalize_header(first.decode("utf-8"))
+        header = core.normalize_header(first.decode("utf-8"), source.column_name)
         columns = columns or header
         data = ",".join(header).encode("utf-8") + b"\n" + rest
         session.file.put_stream(io.BytesIO(data), f"{stage}/part_{files:05d}.csv",
@@ -281,7 +281,7 @@ def _run(session, app, job, mode, run_id):
     source_object = source.object_name(job["SOURCE_OBJECT"])
     db = core.identifier(job["TARGET_DATABASE"], "target database")
     schema = core.identifier(job["TARGET_SCHEMA"], "target schema")
-    table = core.table_identifier(job.get("TARGET_TABLE") or core.default_table_name(source_object))
+    table = core.table_identifier(job.get("TARGET_TABLE") or source.table_name(source_object))
     fq_table = core.table_ref(db, schema, table)
     staging = {suffix: core.table_ref(db, schema, table + suffix) for suffix in ("__DELTA", "__IDS")}
     history = (core.table_ref(db, schema, table + core.HISTORY_SUFFIX)
@@ -294,7 +294,7 @@ def _run(session, app, job, mode, run_id):
 
     fields = _fields(session, app, connector, conn, source_object)
     by_name = {f["FIELD_NAME"].lower(): f for f in fields}
-    types = {core.column_name(f["FIELD_NAME"]): f["SNOWFLAKE_TYPE"] for f in fields}
+    types = {source.column_name(f["FIELD_NAME"]): f["SNOWFLAKE_TYPE"] for f in fields}
     if delete_mode != "off" and (keys.deleted or "").lower() not in by_name:
         raise core.ConfigError(f"{source_object} has no {keys.deleted or 'deleted'} field; "
                                "set the job's delete mode to off")

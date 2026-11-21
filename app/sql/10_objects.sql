@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_JOBS (
   FIELDS               ARRAY COMMENT 'Field names; NULL for every exportable field',
   TARGET_DATABASE      VARCHAR NOT NULL,
   TARGET_SCHEMA        VARCHAR NOT NULL,
-  TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name, uppercased; reserved words like ORDER are quoted',
+  TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name in the connector''s convention (Subscription__c -> SUBSCRIPTION_C); reserved words like ORDER are quoted',
   DELETE_MODE          VARCHAR DEFAULT 'flag' NOT NULL COMMENT 'off, flag, or remove',
   RECONCILE_AFTER_DAYS NUMBER DEFAULT 14 NOT NULL,
   TRACK_HISTORY        BOOLEAN DEFAULT FALSE NOT NULL COMMENT 'Keep type 2 history in <TARGET_TABLE>__HISTORY',

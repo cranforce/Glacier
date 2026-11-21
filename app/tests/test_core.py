@@ -14,14 +14,6 @@ KEYS = core.RecordKeys(key="Id", change="SystemModstamp", deleted="IsDeleted",
 
 
 class NamesTest(unittest.TestCase):
-    def test_default_table_name_is_uppercased_object(self):
-        self.assertEqual(core.default_table_name("GiftTransaction"), "GIFTTRANSACTION")
-        self.assertEqual(core.default_table_name("Subscription__c"), "SUBSCRIPTION__C")
-
-    def test_reserved_object_names_keep_their_name(self):
-        self.assertEqual(core.default_table_name("Order"), "ORDER")
-        self.assertEqual(core.default_table_name("Account"), "ACCOUNT")
-
     def test_table_ref_quotes_reserved_words(self):
         self.assertEqual(core.table_ref("crm_db", "s", "order"), 'CRM_DB.S."ORDER"')
         self.assertEqual(core.table_ref("crm_db", "s", "ORDER__DELTA"), "CRM_DB.S.ORDER__DELTA")
@@ -53,6 +45,15 @@ class ColumnsTest(unittest.TestCase):
         self.assertEqual((KEYS.key_col, KEYS.change_col, KEYS.deleted_col), ("ID", "SYSTEMMODSTAMP", "ISDELETED"))
         self.assertEqual(KEYS.untracked_cols, {"SYSTEMMODSTAMP", "LASTVIEWEDDATE", "LASTREFERENCEDDATE"})
         self.assertIsNone(core.RecordKeys("id", "updated_at").deleted_col)
+
+    def test_record_keys_use_the_connectors_columns(self):
+        keys = core.RecordKeys("id", "updatedAt", column=lambda f: f"X_{f.upper()}")
+        self.assertEqual((keys.key_col, keys.change_col), ("X_ID", "X_UPDATEDAT"))
+
+    def test_normalize_header_rejects_colliding_columns(self):
+        self.assertEqual(core.normalize_header("a,b", str.upper), ["A", "B"])
+        with self.assertRaises(core.ConfigError):
+            core.normalize_header("Foo_Bar,FOO_BAR")
 
     def test_reconcile_due(self):
         now = datetime(2026, 10, 30, tzinfo=timezone.utc)
