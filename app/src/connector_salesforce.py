@@ -13,9 +13,35 @@ from sforce_api import Salesforce
 NAME = "salesforce"
 LABEL = "Salesforce"
 
+# Splits PascalCase at each case change: GiftTransaction -> Gift_Transaction,
+# ExternalID -> External_ID, HTMLBody -> HTML_Body
+CASE_CHANGE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+CUSTOM_SUFFIX = re.compile(r"__c$", re.IGNORECASE)
+
+
+def snowflake_name(name):
+    """A Salesforce name as a Snowflake one: PascalCase split with underscores and
+    __c shortened to _c (GiftTransaction -> GIFT_TRANSACTION,
+    Financial_Batch__c -> FINANCIAL_BATCH_C). A relationship field's dots become
+    underscores (Account.Name -> ACCOUNT_NAME)."""
+    name = name.strip().strip('"')
+    parts = (CASE_CHANGE.sub("_", CUSTOM_SUFFIX.sub("_c", part)) for part in name.split("."))
+    return "_".join(parts).upper()
+
+
+def table_name(sobject):
+    """The default table for an object (Financial_Batch__c -> FINANCIAL_BATCH_C)."""
+    return core.table_identifier(snowflake_name(object_name(sobject)))
+
+
+def column_name(field):
+    return snowflake_name(field)
+
+
 KEYS = core.RecordKeys(key="Id", change="SystemModstamp", deleted="IsDeleted",
                        # Change when someone views the record
-                       untracked=("LastViewedDate", "LastReferencedDate"))
+                       untracked=("LastViewedDate", "LastReferencedDate"),
+                       column=column_name)
 DELETE_MODES = core.DELETE_MODES
 
 SETTINGS = (
@@ -30,6 +56,7 @@ SECRET_PLACEHOLDER = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY----
 OBJECT_PLACEHOLDER = "Subscription__c"
 FIELDS_HELP = "Id, SystemModstamp, and IsDeleted (unless deletes are off) are always included."
 UNEXPORTABLE_NOTE = "address, location, and base64 fields aren't."
+TABLE_NAME_HELP = "the object's name, e.g. Financial_Batch__c -> FINANCIAL_BATCH_C"
 
 MY_DOMAIN_URL = re.compile(r"^https://[A-Za-z0-9-]+(\.sandbox)?\.my\.salesforce\.com/?$")
 API_VERSION = re.compile(r"^\d{2,3}\.0$")
@@ -151,7 +178,7 @@ def build_ids_query(sobject):
 
 def query_columns(soql):
     """The columns a query's export will have, for an export with no rows."""
-    return core.normalize_header(soql[len("SELECT "):soql.index(" FROM ")])
+    return core.normalize_header(soql[len("SELECT "):soql.index(" FROM ")], column_name)
 
 
 # --- Calls to Salesforce ---------------------------------------------------------------

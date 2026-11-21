@@ -14,7 +14,9 @@ ui.show_flash()
 
 ctx = ui.context()
 app = ctx["app"]
-connections = [c["CONNECTION_NAME"] for c in ui.connections()]
+connection_rows = ui.connections()
+connections = [c["CONNECTION_NAME"] for c in connection_rows]
+sources = {c["CONNECTION_NAME"]: ui.connectors.get(c["CONNECTOR"]) for c in connection_rows}
 jobs = ui.jobs()
 states = ui.task_states()
 
@@ -25,7 +27,7 @@ if not connections:
 if jobs:
     st.dataframe(
         [{"JOB_NAME": j["JOB_NAME"], "CONNECTION": j["CONNECTION_NAME"], "OBJECT": j["SOURCE_OBJECT"],
-          "TARGET": forms.target_table(j), "DELETES": j["DELETE_MODE"],
+          "TARGET": forms.target_table(j, sources[j["CONNECTION_NAME"]]), "DELETES": j["DELETE_MODE"],
           "HISTORY": j["TRACK_HISTORY"], "SCHEDULE": j["SCHEDULE"], "ENABLED": j["ENABLED"],
           "TASK": states.get(j["JOB_NAME"], "not saved")} for j in jobs],
         width="stretch", hide_index=True)
@@ -116,14 +118,15 @@ with right:
                                   key=key + "schema")
     target_table = st.text_input(
         "Table", value=default("TARGET_TABLE", ""), key=key + "table",
-        placeholder=core.default_table_name(source_object)
+        placeholder=source.table_name(source_object)
         if source_object and core.IDENTIFIER.match(source_object) else "",
-        help="Blank for the object name, uppercased. Set it to keep loading an existing table.")
+        help=f"Blank for {source.TABLE_NAME_HELP}. Set it to keep loading an existing table.")
     delete_modes = list(source.DELETE_MODES)
     current_mode = default("DELETE_MODE", "flag" if "flag" in delete_modes else delete_modes[0])
     delete_mode = st.selectbox("Deletes", delete_modes, key=key + "deletes",
                                index=delete_modes.index(current_mode) if current_mode in delete_modes else 0,
-                               help="flag sets ISDELETED; remove deletes the row; off ignores deletes.")
+                               help=f"flag sets {source.KEYS.deleted_col or 'a deleted flag'}; remove deletes the row; "
+                                    "off ignores deletes.")
     reconcile_days = st.number_input("Reconcile after days", min_value=1, step=1, key=key + "reconcile",
                                      value=int(default("RECONCILE_AFTER_DAYS", 14)),
                                      disabled=delete_mode == "off")
@@ -168,7 +171,7 @@ if st.button("Save job", type="primary"):
         ui.session().sql(forms.save_job_sql(app), params=forms.row_param(saved)).collect()
         task = ui.call("GLACIER_SAVE_JOB_TASK", saved["JOB_NAME"])
         ui.flash(f"Saved {saved['JOB_NAME']}; task {task['task']} is {task['state']}. "
-                 f"It loads {forms.target_table(saved)}.")
+                 f"It loads {forms.target_table(saved, source)}.")
         st.session_state["_select_job"] = saved["JOB_NAME"]
     except Exception as e:
         ui.show_error(e)

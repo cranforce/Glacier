@@ -7,6 +7,7 @@ HERE = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 sys.path.insert(0, os.path.join(HERE, "..", "streamlit"))
 
+import connector_salesforce as sf  # noqa: E402
 import glacier_core as core  # noqa: E402
 import glacier_forms as forms  # noqa: E402
 
@@ -33,14 +34,14 @@ class JobTest(unittest.TestCase):
         self.assertIsNone(saved["TARGET_TABLE"])
         self.assertIsNone(saved["RUN_AS_USER"])
         self.assertIsNone(saved["FIELDS"])
-        self.assertEqual(forms.target_table(saved), "CRM_DB.S.SUBSCRIPTION__C")
+        self.assertEqual(forms.target_table(saved, sf), "CRM_DB.S.SUBSCRIPTION_C")
 
     def test_manual_schedule_is_null(self):
         self.assertIsNone(forms.validate_job(job(SCHEDULE=""), APP, ROLE, "salesforce")["SCHEDULE"])
 
     def test_reserved_table_is_quoted_in_target(self):
         saved = forms.validate_job(job(SOURCE_OBJECT="Order"), APP, ROLE, "salesforce")
-        self.assertEqual(forms.target_table(saved), 'CRM_DB.S."ORDER"')
+        self.assertEqual(forms.target_table(saved, sf), 'CRM_DB.S."ORDER"')
 
     def test_rejects_bad_values(self):
         for bad in (dict(JOB_NAME="has space"), dict(SOURCE_OBJECT="Bad;Object"), dict(FIELDS=[]),

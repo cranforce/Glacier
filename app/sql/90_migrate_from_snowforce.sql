@@ -1,8 +1,14 @@
 -- Copies Snowforce's connections, jobs, and captured fields from
--- CRM_DB.CMILLER_SF_PLAYGROUND into Glacier. Run once, after deploy.sh. It runs as
--- {{APP_ROLE}}, which needs SELECT on the old SNOWFORCE_ tables. Rows already in
--- Glacier are left alone, so it's safe to run again. Run history isn't copied.
+-- CRM_DB.CMILLER_SF_PLAYGROUND into Glacier, with their run history and synced
+-- tables. Run once, after deploy.sh. It runs as {{APP_ROLE}}, which needs SELECT
+-- on the old SNOWFORCE_ tables and the jobs' tables. Rows and tables already in
+-- Glacier are left alone, so it's safe to run again.
 -- Print a filled-in copy with:  app/deploy.sh migrate-sql
+--
+-- Since run (2026-11-20): the Salesforce connector now names tables and columns
+-- GIFT_TRANSACTION / SYSTEM_MODSTAMP rather than uppercasing them, and the cloned
+-- tables and their columns were renamed to match (jobs' TARGET_TABLE set to NULL).
+-- Running this again would clone the old names back, so don't.
 --
 -- Afterwards:
 -- 1. Re-enter each connection's private key on the Connections page (secret
@@ -26,8 +32,8 @@ SELECT c.CONNECTION_NAME, 'salesforce',
 FROM CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_CONNECTIONS c
 WHERE c.CONNECTION_NAME NOT IN (SELECT CONNECTION_NAME FROM {{APP}}.GLACIER_CONNECTIONS);
 
--- Jobs load the new default destination, so each one's first run is a full
--- load. The old app role, DS_DATA_ENGINEERING_ROLE, is dropped as a run-as role
+-- Jobs load the new default destination, where their tables are cloned below.
+-- The old app role, DS_DATA_ENGINEERING_ROLE, is dropped as a run-as role
 -- without a run-as user (the new app role runs those jobs), and SNOWFORCE_WH
 -- becomes the app warehouse.
 INSERT INTO {{APP}}.GLACIER_JOBS
@@ -54,4 +60,33 @@ FROM CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_FIELDS f
 WHERE NOT EXISTS (SELECT 1 FROM {{APP}}.GLACIER_FIELDS g
                   WHERE g.CONNECTION_NAME = f.CONNECTION_NAME AND g.SOURCE_OBJECT = f.SOBJECT);
 
+-- Successful syncs here keep the first runs from reconciling
+INSERT INTO {{APP}}.GLACIER_RUNS
+  (RUN_ID, JOB_NAME, MODE, STATUS, STARTED_AT, FINISHED_AT, RUN_USER, RUN_ROLE, WATERMARK, SOURCE_QUERY,
+   ROWS_EXPORTED, ROWS_INSERTED, ROWS_UPDATED, ROWS_DELETED, MESSAGE)
+SELECT r.RUN_ID, r.JOB_NAME, r.MODE, r.STATUS, r.STARTED_AT, r.FINISHED_AT, r.RUN_USER, r.RUN_ROLE,
+       r.WATERMARK, r.SOQL, r.ROWS_EXPORTED, r.ROWS_INSERTED, r.ROWS_UPDATED, r.ROWS_DELETED, r.MESSAGE
+FROM CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_RUNS r
+WHERE r.RUN_ID NOT IN (SELECT RUN_ID FROM {{APP}}.GLACIER_RUNS);
+
 COMMIT;
+
+-- Clone each job's table (and its history) so its watermark carries over and
+-- its first run is a delta, not a full load. Zero-copy clones use no warehouse.
+EXECUTE IMMEDIATE $$
+DECLARE
+  tables CURSOR FOR
+    SELECT j.TARGET_DATABASE || '.' || j.TARGET_SCHEMA AS SOURCE_SCHEMA, j.TARGET_TABLE || s.SUFFIX AS NAME
+    FROM CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_JOBS j
+    JOIN (SELECT '' AS SUFFIX UNION ALL SELECT '__HISTORY') s ON s.SUFFIX = '' OR j.TRACK_HISTORY
+    WHERE j.TARGET_TABLE IS NOT NULL
+      AND j.TARGET_TABLE || s.SUFFIX NOT IN (
+        SELECT TABLE_NAME FROM {{APP_DB}}.INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = 'NPC_SALESFORCE_PROD_RAW');
+BEGIN
+  FOR t IN tables DO
+    EXECUTE IMMEDIATE 'CREATE TABLE {{APP_DB}}.NPC_SALESFORCE_PROD_RAW."' || t.NAME || '" CLONE '
+      || t.SOURCE_SCHEMA || '."' || t.NAME || '"';
+  END FOR;
+END;
+$$;

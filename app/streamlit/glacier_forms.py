@@ -131,10 +131,10 @@ def validate_job(values, app, owner_role, connector):
     return job
 
 
-def target_table(job):
-    """The table a job loads, as DB.SCHEMA.TABLE."""
+def target_table(job, source):
+    """The table a job loads, as DB.SCHEMA.TABLE; source is its connector."""
     return core.table_ref(job["TARGET_DATABASE"], job["TARGET_SCHEMA"],
-                          job.get("TARGET_TABLE") or core.default_table_name(job["SOURCE_OBJECT"]))
+                          job.get("TARGET_TABLE") or source.table_name(job["SOURCE_OBJECT"]))
 
 
 # --- Saving -------------------------------------------------------------------------

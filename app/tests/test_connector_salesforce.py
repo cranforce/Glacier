@@ -101,7 +101,42 @@ class QueryTest(unittest.TestCase):
     def test_ids_query_and_columns(self):
         self.assertEqual(sf.build_ids_query("Order"), "SELECT Id FROM Order")
         self.assertEqual(sf.query_columns("SELECT Id, SystemModstamp, Account.Name FROM Order"),
-                         ["ID", "SYSTEMMODSTAMP", "ACCOUNT_NAME"])
+                         ["ID", "SYSTEM_MODSTAMP", "ACCOUNT_NAME"])
+
+
+class NamesTest(unittest.TestCase):
+    def test_pascal_case_splits_at_case_changes(self):
+        for name, column in (("GiftTransaction", "GIFT_TRANSACTION"), ("SystemModstamp", "SYSTEM_MODSTAMP"),
+                             ("IsDeleted", "IS_DELETED"), ("Id", "ID"), ("AccountId", "ACCOUNT_ID"),
+                             ("ExternalID__c", "EXTERNAL_ID_C"), ("HTMLBody", "HTML_BODY"),
+                             ("Product2", "PRODUCT2"), ("Address2Line", "ADDRESS2_LINE")):
+            self.assertEqual(sf.column_name(name), column)
+
+    def test_custom_suffix_loses_an_underscore(self):
+        self.assertEqual(sf.column_name("Financial_Batch__c"), "FINANCIAL_BATCH_C")
+        self.assertEqual(sf.column_name("Batch_Status__C"), "BATCH_STATUS_C")
+        # A namespace's __ stays
+        self.assertEqual(sf.column_name("npsp__Primary_Contact__c"), "NPSP__PRIMARY_CONTACT_C")
+        self.assertEqual(sf.column_name("Owner__r"), "OWNER__R")
+
+    def test_relationship_fields(self):
+        self.assertEqual(sf.column_name("Account.Name"), "ACCOUNT_NAME")
+        self.assertEqual(sf.column_name("CreatedBy.LastName"), "CREATED_BY_LAST_NAME")
+        self.assertEqual(sf.column_name("Batch__r.Batch_Name__c"), "BATCH__R_BATCH_NAME_C")
+
+    def test_table_names(self):
+        for sobject, table in (("GiftTransaction", "GIFT_TRANSACTION"), ("Subscription__c", "SUBSCRIPTION_C"),
+                               ("Financial_Batch__c", "FINANCIAL_BATCH_C"), ("Order", "ORDER"),
+                               ("ContactPointAddress", "CONTACT_POINT_ADDRESS")):
+            self.assertEqual(sf.table_name(sobject), table)
+        with self.assertRaises(core.ConfigError):
+            sf.table_name("Order; DROP")
+
+    def test_keys_use_the_convention(self):
+        self.assertEqual((sf.KEYS.key_col, sf.KEYS.change_col, sf.KEYS.deleted_col),
+                         ("ID", "SYSTEM_MODSTAMP", "IS_DELETED"))
+        self.assertEqual(sf.KEYS.untracked_cols,
+                         {"SYSTEM_MODSTAMP", "LAST_VIEWED_DATE", "LAST_REFERENCED_DATE"})
 
 
 if __name__ == "__main__":

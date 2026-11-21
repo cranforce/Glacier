@@ -62,7 +62,7 @@ list.
 | `SOURCE_OBJECT` | yes | The object to sync; for Salesforce, its API name, e.g. `Subscription__c` |
 | `FIELDS` | | Array of field API names. `NULL` for every exportable field. `Id` and `SystemModstamp` (and `IsDeleted` unless deletes are off) are always added |
 | `TARGET_DATABASE`, `TARGET_SCHEMA` | yes | Where the table goes |
-| `TARGET_TABLE` | | `NULL` for the object name uppercased (`SUBSCRIPTION__C`). Set it to keep loading an existing table; see [Table names](how-syncing-works.md#table-names) |
+| `TARGET_TABLE` | | `NULL` for the object name ([named](how-syncing-works.md#column-names) `SUBSCRIPTION_C`). Set it to keep loading an existing table; see [Table names](how-syncing-works.md#table-names) |
 | `DELETE_MODE` | | `flag` (default), `remove`, or `off`; see [Deletes](how-syncing-works.md#deletes) |
 | `RECONCILE_AFTER_DAYS` | | Default 14; see [Reconcile](how-syncing-works.md#reconcile) |
 | `TRACK_HISTORY` | | `TRUE` to keep `<TARGET_TABLE>__HISTORY`; see [History](how-syncing-works.md#history) |
@@ -88,7 +88,7 @@ CALL GLACIER_RUN_JOB('SUBSCRIPTION', 'reconcile');  -- check every Id for delete
 | Mode | Does |
 | --- | --- |
 | `auto` (default) | The job's `NEXT_RUN_MODE` if set (then clears it), else `sync` |
-| `sync` | Delta since the table's `MAX(SYSTEMMODSTAMP)`, merged on Id. Full load if the table is new or empty. Reconciles when due |
+| `sync` | Delta since the table's `MAX(SYSTEM_MODSTAMP)`, merged on Id. Full load if the table is new or empty. Reconciles when due |
 | `full` | Rebuild the table from every record |
 | `reconcile` | Flag or remove rows whose Id is gone from Salesforce; loads no other changes |
 
