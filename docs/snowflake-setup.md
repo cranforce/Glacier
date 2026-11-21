@@ -40,7 +40,20 @@ the job's role, so a job can only write where that role can write.
 
 ## Prerequisites
 
-- The **Snowflake CLI** with a working connection; see [Local setup, step 3](local-setup.md#3-add-a-snowflake-connection).
+- The **Snowflake CLI** (`snow`): `brew install snowflake-cli`, or `pipx install snowflake-cli`.
+  `app/app.env` expects a connection named `ODBM`; add it with `snow connection add`, or in
+  `~/.snowflake/connections.toml`, then check it with `snow connection test -c ODBM`:
+
+  ```toml
+  [ODBM]
+  account = "<account identifier>"
+  user = "<you>@<your domain>"
+  authenticator = "externalbrowser"
+  role = "GLACIER_APP_ROLE"
+  warehouse = "GLACIER_WH"
+  # Caches the SSO token, so a deploy doesn't open a browser tab for every connection
+  client_store_temporary_credential = true
+  ```
 - The **app role** granted to you (`GRANT ROLE GLACIER_APP_ROLE TO USER <you>`), once an admin
   has created it in step 1.
 - To run the unit tests: Python 3.11 with `requests` and `cryptography`.
@@ -66,8 +79,8 @@ app/deploy.sh admin-sql setup
 It creates the role (granted to `SYSADMIN`), a small warehouse, the database, and the
 schema, which the app role owns. It also creates `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`, the default
 destination for Salesforce data, also owned by the app role, and grants the account-level
-`EXECUTE TASK` the app's run buttons need. Other roles that load data there, such as the local
-CLI's role, need the commented grants at the end. See
+`EXECUTE TASK` the app's run buttons need. Other roles that load data there, such as a job's
+run-as role, need the commented grants at the end. See
 [Where the app lives](streamlit-app-design.md#where-the-app-lives).
 
 ## 2. Deploy the app

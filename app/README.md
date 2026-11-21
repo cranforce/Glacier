@@ -1,6 +1,6 @@
 # Glacier engine (Snowflake-native)
 
-Phases 1 and 2 of [docs/streamlit-app-design.md](../docs/streamlit-app-design.md): the sync engine
+The design is in [docs/streamlit-app-design.md](../docs/streamlit-app-design.md): the sync engine
 as Snowflake tables, procedures, and tasks, and a Streamlit app to manage it. You can also drive it
 with SQL ([sql/examples.sql](sql/examples.sql)).
 
@@ -15,7 +15,6 @@ with SQL ([sql/examples.sql](sql/examples.sql)).
 | `sql/20_admin_integration.sql` | One-time admin SQL per connector: its external access integration, plus per-run-as-user grants |
 | `sql/30_procedures.sql` | `GLACIER_RUN_JOB`, `GLACIER_SAVE_JOB_TASK`, `GLACIER_REFRESH_CONNECTIONS` |
 | `sql/40_streamlit.sql` | The `GLACIER_APP` Streamlit app |
-| `sql/90_migrate_from_snowforce.sql` | Copies connections, jobs, and fields from the Snowforce schema (phase 3 cutover) |
 | `sql/examples.sql` | Add a connection and a job, run it, read the history |
 | `src/glacier_core.py` | Pure logic: names, load SQL, history, procedure and task DDL |
 | `src/glacier_connectors.py` | The connectors by name, and what each one provides |
@@ -47,7 +46,6 @@ app/deploy.sh                        # create or update the app
 app/deploy.sh streamlit              # update only the Streamlit app
 app/deploy.sh admin-sql setup        # one-time admin SQL, before the first deploy
 app/deploy.sh admin-sql integration salesforce  # one-time admin SQL per connector, after the first deploy
-app/deploy.sh migrate-sql            # SQL to copy connections and jobs from the Snowforce schema
 app/deploy.sh render                 # print the deploy SQL without running it
 app/streamlit/run_local.sh           # run the Streamlit app locally (Python 3.11, streamlit, snowpark)
 python3 -m unittest discover -s app/tests
@@ -105,6 +103,6 @@ of `src/` next to the app, and locally they're read from `src/`.
 
 ## History
 
-Set `TRACK_HISTORY = TRUE` on a job to keep type 2 history in `<TARGET_TABLE>__HISTORY`, the
-same as `history` in the CLI's `objects.conf` (see the [main README](../README.md#history)).
+Set `TRACK_HISTORY = TRUE` on a job to keep type 2 history in `<TARGET_TABLE>__HISTORY` (see
+[History](../docs/how-syncing-works.md#history)).
 The job's role needs to be able to create and write that table.

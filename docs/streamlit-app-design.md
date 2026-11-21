@@ -70,7 +70,7 @@ The key split: **Salesforce access and Snowflake data access are separate.**
   and writes the CSV parts to the app's `EXPORTS` stage. It never touches destination tables.
 - `RUN_JOB` is a caller's-rights procedure, so it runs as the job's role. It reads the watermark
   from the destination table, calls `SFORCE_EXTRACT`, then does the `ALTER` / `COPY` / `MERGE` /
-  reconcile against the destination. This is today's `sf_to_snowflake.sh`, ported.
+  reconcile against the destination. This was the original local CLI's `sf_to_snowflake.sh`, ported.
 - So a job can only write where its role can write, and job roles never see Salesforce credentials.
 
 ### Config tables
@@ -80,9 +80,9 @@ The key split: **Salesforce access and Snowflake data access are separate.**
 | `CONNECTIONS` | name, My Domain URL (`https://<domain>.my.salesforce.com`), client id, secret name, API version |
 | `JOBS` | connection, object, field list (or "all"), destination database, schema, and table (defaults to the object name), delete mode, history on or off, run-as user, role, warehouse, schedule (cron), enabled |
 | `RUNS` | one row per run: job, start and end, mode (delta, full, reconcile), rows exported, rows merged, status, error |
-| `SFORCE_FIELDS` | cached `describe` per connection and object; replaces `schema/` and drives field pickers and column types |
+| `SFORCE_FIELDS` | cached `describe` per connection and object; replaced the CLI's `schema/` and drives field pickers and column types |
 
-`state/*.last_sync` becomes `RUNS`, and `objects.conf` and `project.env` become `JOBS` and `CONNECTIONS`.
+The CLI's `state/*.last_sync` became `RUNS`, and its `objects.conf` and `project.env` became `JOBS` and `CONNECTIONS`.
 
 ### Salesforce authentication
 
@@ -166,10 +166,10 @@ consumer key.
    `CALL` and tasks. Parity-test against the CLI on one object (row counts, types, deletes).
 2. **Streamlit app.** *Scaffolded: `app/streamlit/`, deployed by `app/deploy.sh` as
    `GLACIER_APP`.* The three pages above.
-3. **Cut over.** Move existing objects to jobs, compare tables, then retire or keep the CLI as a
-   fallback.
+3. **Cut over.** *Done 2026-11-20: see the [roadmap](glacier-roadmap.md).* Existing objects moved
+   to jobs, and the CLI was retired.
 
-## Differences from the CLI
+## Differences from the retired CLI
 
 - **Table names default to the object name** (`SUBSCRIPTION_C`, `GIFT_TRANSACTION`). To keep loading
   an existing table such as `SUBSCRIPTION`, set it as the job's table; otherwise the first run

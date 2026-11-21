@@ -33,6 +33,6 @@ GRANT EXECUTE TASK ON ACCOUNT TO ROLE {{APP_ROLE}};
 CREATE SCHEMA IF NOT EXISTS {{APP_DB}}.NPC_SALESFORCE_PROD_RAW COMMENT = 'Glacier: Salesforce production data';
 GRANT OWNERSHIP ON SCHEMA {{APP_DB}}.NPC_SALESFORCE_PROD_RAW TO ROLE {{APP_ROLE}} COPY CURRENT GRANTS;
 
--- Other roles that load it, such as the local CLI's role or a job's run-as role:
+-- Other roles that load it, such as a job's run-as role:
 -- GRANT USAGE ON DATABASE {{APP_DB}} TO ROLE <loader_role>;
 -- GRANT USAGE, CREATE TABLE ON SCHEMA {{APP_DB}}.NPC_SALESFORCE_PROD_RAW TO ROLE <loader_role>;

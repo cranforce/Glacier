@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_JOBS (
   UPDATED_AT           TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
--- One row per run; replaces the CLI's state/ folder.
+-- One row per run.
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_RUNS (
   RUN_ID        VARCHAR NOT NULL PRIMARY KEY,
   JOB_NAME      VARCHAR NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_RUNS (
   MESSAGE       VARCHAR
 );
 
--- Each object's captured fields (a Salesforce describe); replaces the CLI's schema/ folder.
+-- Each object's captured fields (a Salesforce describe).
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_FIELDS (
   CONNECTION_NAME VARCHAR NOT NULL,
   SOURCE_OBJECT   VARCHAR NOT NULL,

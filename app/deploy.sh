@@ -7,7 +7,6 @@
 #   app/deploy.sh admin-sql setup        One-time admin SQL, before the first deploy
 #   app/deploy.sh admin-sql integration <connector>
 #                                        One-time admin SQL per connector, after the first deploy
-#   app/deploy.sh migrate-sql            SQL to copy connections and jobs from the Snowforce schema
 #   app/deploy.sh render                 Print the deploy SQL without running it
 #
 # Settings are in app/app.env.
@@ -76,7 +75,6 @@ case "${1:-deploy}" in
           sed -e "s|{{CONNECTOR}}|$(echo "$connector" | tr '[:lower:]' '[:upper:]')|g" ;;
       *) echo "Usage: $0 admin-sql setup|integration <connector>" >&2; exit 1 ;;
     esac ;;
-  migrate-sql) render sql/90_migrate_from_snowforce.sql ;;
   render)    deploy_sql ;;
   deploy)
     echo "==> Deploying Glacier to $app as $APP_ROLE via connection '$SNOW_CONNECTION'..."
@@ -87,5 +85,5 @@ case "${1:-deploy}" in
     echo "==> Deploying the Streamlit app to $app as $APP_ROLE via connection '$SNOW_CONNECTION'..."
     run_sql streamlit_sql
     ;;
-  *) sed -n '2,14p' "$(basename "$0")" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,13p' "$(basename "$0")" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
