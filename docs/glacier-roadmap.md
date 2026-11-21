@@ -9,7 +9,8 @@ Glacier started as Snowforce, a Salesforce-to-Snowflake sync. It is becoming a g
 sync enterprise systems into Snowflake. Salesforce is the first source and ShipHero the next,
 each a *connector* behind the same jobs, runs, scheduling, delete handling, and history.
 
-Status: phases 1 and 2 are done in the repo. Nothing has been deployed to the new home yet.
+Status: phases 1 to 3 are done. Glacier runs in `GLACIER_DB.APP`, and the Snowforce tasks are
+suspended. Phase 3's last step, dropping the old Snowforce objects, is still to do.
 
 1. TOC
 {:toc}
@@ -20,8 +21,8 @@ Status: phases 1 and 2 are done in the repo. Nothing has been deployed to the ne
 | --- | --- | --- | --- |
 | 1 | Rename to Glacier; give it its own database, schema, role, and warehouse | Repo | Done |
 | 2 | Connector abstraction, with Salesforce as the first connector and no change in behaviour | Repo | Done |
-| 3 | Stand up `GLACIER_DB.APP` in Snowflake, move the connections and jobs, and cut over | Snowflake | Next |
-| 4 | ShipHero connector | Repo, then Snowflake | After 3 |
+| 3 | Stand up `GLACIER_DB.APP` in Snowflake, move the connections and jobs, and cut over | Snowflake | Done, except dropping the old objects |
+| 4 | ShipHero connector | Repo, then Snowflake | Next |
 
 Phase 2 comes before phase 3 on purpose: the new tables are then created in their final shape,
 and the connections and jobs are copied only once.
@@ -38,19 +39,7 @@ and the connections and jobs are copied only once.
   `app/deploy.sh admin-sql integration`.
 - The `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` upgrades for pre-JWT and pre-history tables are
   gone, since the new tables start fresh.
-
-Still to do outside the repo:
-
-- **Synced data now defaults to `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`**, both in the CLI
-  (`project.env`) and in the job examples. `app/deploy.sh admin-sql setup` creates it. Until
-  an admin has run that, and has granted your CLI role access, run the CLI with
-  `SNOW_DB=CRM_DB SNOW_SCHEMA=CMILLER_SF_PLAYGROUND ./run.sh`.
-- **`GLACIER_WH` doesn't exist yet.** The local CLI (`project.env`, `bin/sf_to_snowflake.sh`)
-  and the ad hoc SQL now default to it. Until it's created, run the CLI with
-  `SNOW_WAREHOUSE=SNOWFORCE_WH ./run.sh`.
-- **The engine deployed in `CRM_DB.CMILLER_SF_PLAYGROUND` still uses the `SNOWFORCE_` names.**
-  Leave it running until the cutover in phase 3. Don't run `app/deploy.sh` against the
-  playground from this branch, because it would create a second set of `GLACIER_` objects next to it.
+- Synced data defaults to `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`, which `app/deploy.sh admin-sql setup` creates.
 
 ## Phase 2: connectors (done)
 
@@ -116,33 +105,30 @@ A job's run-as role now also needs `SELECT` on `GLACIER_CONNECTIONS`, to find th
 - **Jobs:** objects and fields come from whatever the connector's list and describe return, and
   the labels, placeholders, and delete modes come from the connector.
 
-### Migration
+## Phase 3: stand up Glacier in Snowflake (done 2026-11-20)
 
-`app/sql/90_migrate_from_snowforce.sql` (`app/deploy.sh migrate-sql`) copies the playground's
-connections, jobs, and captured fields into the new tables for phase 3. Connections become
-`salesforce` connections with their columns in `SETTINGS`; jobs move to
-`GLACIER_DB.NPC_SALESFORCE_PROD_RAW` and `GLACIER_WH`.
+1. An admin ran `app/deploy.sh admin-sql setup`: `GLACIER_APP_ROLE`, `GLACIER_WH` (small),
+   `GLACIER_DB`, and its `APP` and `NPC_SALESFORCE_PROD_RAW` schemas.
+2. `app/deploy.sh` deployed the tables, procedures, and the `GLACIER_APP` Streamlit app.
+3. An admin ran `app/deploy.sh admin-sql integration salesforce` (`GLACIER_SALESFORCE_EAI`).
+4. A one-off migration script, since removed, copied from `CRM_DB.CMILLER_SF_PLAYGROUND`:
+   - the `SNOWFORCE_*` connection, 14 jobs, captured fields, and run history into the
+     `GLACIER_*` tables, with the jobs pointed at `GLACIER_DB.NPC_SALESFORCE_PROD_RAW` and
+     `GLACIER_WH`;
+   - the 28 synced tables (14 current, 14 history) as zero-copy clones, so each job's watermark
+     carried over and its first run was a delta, not a full load.
+5. The connection's private key was re-entered on the Connections page, and each job's task was
+   created. The 14 `SNOWFORCE_JOB_*` tasks were suspended first, so the two never overlapped.
+6. Tables and columns were renamed to the Salesforce connector's naming convention
+   (`GIFT_TRANSACTION`, `SYSTEM_MODSTAMP`, `FINANCIAL_BATCH_C`; see
+   [Column names](how-syncing-works.md#column-names)), and the jobs' `TARGET_TABLE` cleared to
+   follow it.
+7. The local CLI (`run.sh`, `bin/`, `objects.conf`, `project.env`) was retired: Glacier's tasks
+   replace it.
 
-## Phase 3: stand up Glacier in Snowflake
-
-1. Admin: `app/deploy.sh admin-sql setup`, and grant `GLACIER_APP_ROLE` to whoever administers
-   the app.
-2. `app/deploy.sh`.
-3. Admin: `app/deploy.sh admin-sql integration salesforce`, plus the grants for each run-as
-   user.
-4. Copy the connections, jobs, and captured fields from `CRM_DB.CMILLER_SF_PLAYGROUND.SNOWFORCE_*`
-   with the output of `app/deploy.sh migrate-sql` (the app role needs `SELECT` on the old tables).
-   Re-enter each connection's private key on the Connections page, then save each job to create
-   its task.
-5. The migrated jobs load `GLACIER_DB.NPC_SALESFORCE_PROD_RAW`. The tables there are new, so each
-   job's first run is a full load. Once the new tables match the old ones, suspend the old
-   `SNOWFORCE_JOB_*` tasks.
-6. When the new jobs have run cleanly for a while, drop the old `SNOWFORCE_*` objects in the
-   playground, and `SNOWFORCE_WH` if nothing else uses it. Then decide what to do with the
-   playground's synced tables.
-
-`GLACIER_RUNS` starts empty, so the first sync of each job also runs a reconcile, because there's
-no recorded last success. That costs one Id-only export per job, and it does no harm.
+Still to do: once the Glacier jobs have run cleanly for a while, drop the old `SNOWFORCE_*`
+objects and synced tables in `CRM_DB.CMILLER_SF_PLAYGROUND`, and `SNOWFORCE_WH` if nothing else
+uses it.
 
 ## Phase 4: ShipHero
 
@@ -159,7 +145,6 @@ Answer these first:
 
 ## Open decisions
 
-- **Local CLI.** It stays Salesforce-only. Keep it as a fallback after phase 3, or retire it.
 - **Object prefix.** Objects keep `GLACIER_` even in their own schema (see
-  [Where the app lives](streamlit-app-design.md#where-the-app-lives)). Dropping the prefix is
-  easy before phase 3, and harder after.
+  [Where the app lives](streamlit-app-design.md#where-the-app-lives)). Now that the app is
+  deployed, dropping the prefix means renaming its tables, procedures, tasks, and secrets.
