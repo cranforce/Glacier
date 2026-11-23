@@ -128,6 +128,14 @@ def sql_string(value):
     return "'" + str(value).replace("\\", "\\\\").replace("'", "''") + "'"
 
 
+def source_api(api, apis):
+    """A job's SOURCE_API, lowercased, or the connector's default (the first of apis) when blank."""
+    api = (api or "").strip().lower() or apis[0]
+    if api not in apis:
+        raise ConfigError(f"Unknown API {api!r}; use one of {', '.join(apis)}")
+    return api
+
+
 # --- Columns -------------------------------------------------------------------
 
 def column_name(field_name):
@@ -369,7 +377,14 @@ SECRET_PROCEDURES = (
     ("LIST_OBJECTS", "CONNECTION_NAME VARCHAR", "list_objects"),
     ("DESCRIBE", "CONNECTION_NAME VARCHAR, SOURCE_OBJECT VARCHAR", "describe"),
     ("EXTRACT",
-     "CONNECTION_NAME VARCHAR, SOURCE_QUERY VARCHAR, INCLUDE_DELETED BOOLEAN, RUN_ID VARCHAR", "extract"),
+     "CONNECTION_NAME VARCHAR, SOURCE_QUERY VARCHAR, INCLUDE_DELETED BOOLEAN, RUN_ID VARCHAR, "
+     "SOURCE_API VARCHAR", "extract"),
+)
+
+# Earlier argument types of SECRET_PROCEDURES, dropped so calls can't match an
+# old overload: (action, argument types)
+RETIRED_SIGNATURES = (
+    ("EXTRACT", "VARCHAR, VARCHAR, BOOLEAN, VARCHAR, VARCHAR, VARCHAR"),
 )
 
 
@@ -395,7 +410,8 @@ def secret_procedure_ddl(app, connector, integration, connections):
     (connection name, fully qualified secret name) for this connector.
     """
     secrets = ", ".join(f"'{secret_alias(name)}' = {secret}" for name, secret in connections)
-    statements = []
+    statements = [f"DROP PROCEDURE IF EXISTS {app}.{procedure_name(connector, action)}({types})"
+                  for action, types in RETIRED_SIGNATURES]
     for action, args, handler in SECRET_PROCEDURES:
         statements.append(
             f"CREATE OR REPLACE PROCEDURE {app}.{procedure_name(connector, action)}({args}, "

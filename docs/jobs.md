@@ -36,7 +36,7 @@ ORDER BY POSITION;
 ```
 
 `SNOWFLAKE_TYPE` is the column type the load will use. Fields that aren't `EXPORTABLE` (address,
-location, and base64 fields) can't come through the Bulk API; their component fields, such as
+location, and base64 fields) can't come through the Bulk API, so no job exports them; their component fields, such as
 `BillingCity`, can. A job's first run
 describes the object itself if you haven't.
 
@@ -61,6 +61,7 @@ list.
 | `CONNECTION_NAME` | yes | A row in `GLACIER_CONNECTIONS` |
 | `SOURCE_OBJECT` | yes | The object to sync; for Salesforce, its API name, e.g. `Subscription__c` |
 | `FIELDS` | | Array of field API names. `NULL` for every exportable field. `Id` and `SystemModstamp` (and `IsDeleted` unless deletes are off) are always added |
+| `SOURCE_API` | | `bulk` (default, also `NULL`) or `rest`; see [APIs](how-syncing-works.md#apis) |
 | `TARGET_DATABASE`, `TARGET_SCHEMA` | yes | Where the table goes |
 | `TARGET_TABLE` | | `NULL` for the object name ([named](how-syncing-works.md#column-names) `SUBSCRIPTION_C`). Set it to keep loading an existing table; see [Table names](how-syncing-works.md#table-names) |
 | `DELETE_MODE` | | `flag` (default), `remove`, or `off`; see [Deletes](how-syncing-works.md#deletes) |

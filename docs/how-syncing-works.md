@@ -27,6 +27,21 @@ field list leaves them out.
 A sync does a **full load** instead when the table doesn't exist, is empty, or has no
 `SystemModstamp` column.
 
+## APIs
+
+A Salesforce job exports through the API in its `SOURCE_API`, and every run of the job (sync, full
+load, or reconcile) uses it:
+
+| API | How | Counts against |
+| --- | --- | --- |
+| `bulk` (default) | A Bulk API 2.0 query job, polled until done, then read in 50,000-record pages | The org's Bulk API query limits |
+| `rest` | REST `query` (or `queryAll` when deleted records are wanted), 2,000 records per call | The org's daily API request limit |
+
+`rest` suits frequent syncs whose deltas are small: there's no job to wait for and nothing counts
+against the Bulk API. `bulk` suits large objects and full loads, which would take hundreds of REST
+calls. Both write the same CSV, so a job can switch APIs between runs without changing its table.
+REST sends the query in the URL, so a job selecting several hundred fields can be too long for it.
+
 ## New fields
 
 Add the field to the job's `FIELDS` and sync; missing columns are added to the table. A job with

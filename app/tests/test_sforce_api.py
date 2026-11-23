@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+from decimal import Decimal
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -17,7 +18,7 @@ class FakeResponse:
         self.status_code, self._json, self.content = status, json, content
         self.headers, self.text = headers or {}, text
 
-    def json(self):
+    def json(self, **kw):
         return self._json
 
 
@@ -114,6 +115,41 @@ class SalesforceTest(unittest.TestCase):
                         FakeResponse(json={"state": "Failed", "errorMessage": "bad field"})])
         with self.assertRaisesRegex(SalesforceError, "bad field"):
             list(sf.bulk_query("SELECT Nope FROM X", sleep=lambda s: None))
+
+    def test_rest_query_follows_next_records_url(self):
+        sf, http = client([
+            TOKEN,
+            FakeResponse(json={"done": False, "nextRecordsUrl": "/services/data/v64.0/queryAll/01g-2000",
+                               "records": [{"attributes": {}, "Id": "a"}, {"attributes": {}, "Id": "b"}]}),
+            FakeResponse(json={"done": True, "records": [{"attributes": {}, "Id": "c"}]}),
+        ])
+        pages = list(sf.rest_query("SELECT Id FROM X", all_rows=True, page_size=2))
+        self.assertEqual(pages, [(b"Id\na\nb\n", 2), (b"Id\nc\n", 1)])
+        self.assertEqual(http.calls[1][1], "https://x.my.salesforce.com/services/data/v64.0/queryAll")
+        self.assertEqual(http.calls[1][2]["params"], {"q": "SELECT Id FROM X"})
+        self.assertEqual(http.calls[2][1], "https://x.my.salesforce.com/services/data/v64.0/queryAll/01g-2000")
+        self.assertIsNone(http.calls[2][2]["params"])
+
+    def test_rest_query_writes_bulk_style_csv(self):
+        sf, http = client([TOKEN, FakeResponse(json={"done": True, "records": [{
+            "attributes": {"type": "Order"}, "Id": "a", "SystemModstamp": "2026-10-01T12:00:00.000+0000",
+            "IsDeleted": False, "Amount": Decimal("1234.50"), "Name": 'Say "hi",\nthen go',
+            "Account": {"attributes": {}, "Name": "Acme"}, "CreatedBy": None, "Note": None}]})])
+        [(page, count)] = sf.rest_query(
+            "SELECT Id, SystemModstamp, IsDeleted, Amount, name, Account.Name, CreatedBy.Name, Note FROM Order")
+        self.assertEqual(count, 1)
+        self.assertEqual(page.decode(), "Id,SystemModstamp,IsDeleted,Amount,name,Account.Name,CreatedBy.Name,Note\n"
+                                        'a,2026-10-01T12:00:00.000Z,false,1234.50,"Say ""hi"",\nthen go",Acme,,\n')
+        self.assertTrue(http.calls[1][1].endswith("/services/data/v64.0/query"))
+
+    def test_rest_query_with_no_records_yields_a_header(self):
+        sf, _ = client([TOKEN, FakeResponse(json={"done": True, "records": []})])
+        self.assertEqual(list(sf.rest_query("SELECT Id, Name FROM X")), [(b"Id,Name\n", 0)])
+
+    def test_rest_query_needs_a_plain_field_list(self):
+        sf, _ = client([])
+        with self.assertRaises(SalesforceError):
+            list(sf.rest_query("SELECT COUNT(Id) FROM X"))
 
 
 if __name__ == "__main__":

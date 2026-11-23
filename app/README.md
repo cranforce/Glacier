@@ -19,7 +19,7 @@ with SQL ([sql/examples.sql](sql/examples.sql)).
 | `src/glacier_core.py` | Pure logic: names, load SQL, history, procedure and task DDL |
 | `src/glacier_connectors.py` | The connectors by name, and what each one provides |
 | `src/connector_salesforce.py` | The Salesforce connector: settings, types, SOQL, and calls through `sforce_api.py` |
-| `src/sforce_api.py` | Salesforce client: JWT bearer login, describe, Bulk API 2.0 |
+| `src/sforce_api.py` | Salesforce client: JWT bearer login, describe, Bulk API 2.0 and REST queries |
 | `src/glacier_procs.py` | Procedure handlers; they reach sources through the connectors |
 | `streamlit/` | The Streamlit app: a home page, and Connections, Jobs, and Runs pages |
 | `streamlit/glacier_forms.py` | Pure logic behind the forms: validation and the save SQL |
@@ -78,7 +78,7 @@ python3 -m unittest discover -s app/tests
 | `GLACIER_SALESFORCE_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
 | `GLACIER_SALESFORCE_LIST_OBJECTS(conn)` | owner | Queryable objects, for picking one |
 | `GLACIER_SALESFORCE_DESCRIBE(conn, object)` | owner | Capture fields into `GLACIER_FIELDS` |
-| `GLACIER_SALESFORCE_EXTRACT(conn, query, include_deleted, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
+| `GLACIER_SALESFORCE_EXTRACT(conn, query, include_deleted, run_id, api)` | owner | Bulk API or REST export to the `GLACIER_EXPORTS` stage |
 
 The last four are Salesforce's own; each connector gets its set, `GLACIER_<CONNECTOR>_<ACTION>`, holding only its connections' secrets. They exist only once the connector's integration does.
 

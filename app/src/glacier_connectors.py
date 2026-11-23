@@ -5,6 +5,7 @@ A connector is a module that provides:
   NAME, LABEL         "salesforce", "Salesforce"
   KEYS                glacier_core.RecordKeys: the key, change, and deleted fields
   DELETE_MODES        The delete modes it supports (all of them when it reports deletes)
+  APIS, API_HELP      The APIs a job can export through, the default first, and form help
   SETTINGS            glacier_core.Setting per connection setting, stored in SETTINGS
   SECRET_LABEL, SECRET_PLACEHOLDER, OBJECT_PLACEHOLDER, FIELDS_HELP, UNEXPORTABLE_NOTE,
   TABLE_NAME_HELP
@@ -24,7 +25,7 @@ and, given a connection's settings and secret, run in an owner's rights procedur
   test(settings, secret) -> dict
   list_objects(settings, secret) -> [{name, label, custom}]
   describe(settings, secret, object) -> (object name, GLACIER_FIELDS rows)
-  export(settings, secret, query, include_deleted) -> iterator of (CSV bytes, record count)
+  export(settings, secret, query, include_deleted, api) -> iterator of (CSV bytes, record count)
 
 Each page an export yields is CSV whose header row names the fields.
 """

@@ -168,13 +168,23 @@ class DdlTest(unittest.TestCase):
     def test_secret_procedures(self):
         ddl = core.secret_procedure_ddl("DB.SC", "salesforce", "EAI",
                                         [("ODBM_PROD", "DB.SC.SEC1"), ("EU", "DB.SC.SEC2")])
+        drops, ddl = ddl[:len(core.RETIRED_SIGNATURES)], ddl[len(core.RETIRED_SIGNATURES):]
+        self.assertEqual(drops, ["DROP PROCEDURE IF EXISTS DB.SC.GLACIER_SALESFORCE_EXTRACT"
+                                 "(VARCHAR, VARCHAR, BOOLEAN, VARCHAR, VARCHAR, VARCHAR)"])
         self.assertEqual(len(ddl), len(core.SECRET_PROCEDURES))
         self.assertIn("PROCEDURE DB.SC.GLACIER_SALESFORCE_TEST_CONNECTION(", ddl[0])
         self.assertIn("PROCEDURE DB.SC.GLACIER_SALESFORCE_EXTRACT(", ddl[-1])
+        self.assertIn("RUN_ID VARCHAR, SOURCE_API VARCHAR, CONNECTOR VARCHAR", ddl[-1])
         self.assertIn("SECRETS = ('odbm_prod' = DB.SC.SEC1, 'eu' = DB.SC.SEC2)", ddl[0])
         self.assertIn("EXTERNAL_ACCESS_INTEGRATIONS = (EAI)", ddl[0])
         self.assertIn("CONNECTOR VARCHAR DEFAULT 'salesforce', APP_SCHEMA VARCHAR DEFAULT 'DB.SC'", ddl[0])
-        self.assertNotIn("SECRETS", core.secret_procedure_ddl("DB.SC", "salesforce", "EAI", [])[0])
+        self.assertNotIn("SECRETS", core.secret_procedure_ddl("DB.SC", "salesforce", "EAI", [])[-1])
+
+    def test_source_api(self):
+        self.assertEqual(core.source_api(None, ("bulk", "rest")), "bulk")
+        self.assertEqual(core.source_api(" Rest ", ("bulk", "rest")), "rest")
+        with self.assertRaises(core.ConfigError):
+            core.source_api("soap", ("bulk", "rest"))
 
     def test_connector_names(self):
         self.assertEqual(core.procedure_name("shiphero", "DESCRIBE"), "GLACIER_SHIPHERO_DESCRIBE")
