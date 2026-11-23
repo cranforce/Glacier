@@ -2,11 +2,20 @@
 
 Logs in with the OAuth 2.0 JWT bearer flow: a JWT naming the External Client
 App (its consumer key) and the integration user, signed with the private key
-whose certificate is uploaded to the app.
+whose certificate is uploaded to the app. Queries run through either API and
+come back the same way, as CSV pages shaped like the Bulk API's.
 """
 import base64
+import csv
+import io
 import json
+import re
 import time
+from decimal import Decimal
+
+# The REST API writes datetimes as 2026-10-01T12:00:00.000+0000; the Bulk API's
+# CSV, as 2026-10-01T12:00:00.000Z.
+REST_DATETIME = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3})\+0000$")
 
 
 class SalesforceError(RuntimeError):
@@ -70,12 +79,15 @@ class Salesforce:
         self.instance_url = body.get("instance_url") or self.my_domain_url
 
     def request(self, method, path, headers=None, **kwargs):
-        """Call /services/data/v<version><path>, logging in again once if the token expired."""
+        """Call /services/data/v<version><path>, logging in again once if the token expired.
+        A path that starts with /services/ (a REST query's nextRecordsUrl) is used as is."""
+        if not path.startswith("/services/"):
+            path = f"/services/data/v{self.api_version}{path}"
         for attempt in (1, 2):
             if self.token is None:
                 self.authenticate()
             r = self.http.request(
-                method, f"{self.instance_url}/services/data/v{self.api_version}{path}",
+                method, f"{self.instance_url}{path}",
                 headers={"Authorization": f"Bearer {self.token}", **(headers or {})},
                 timeout=self.timeout, **kwargs)
             if r.status_code == 401 and attempt == 1:
@@ -132,3 +144,68 @@ class Salesforce:
             locator = r.headers.get("Sforce-Locator")
             if not locator or locator == "null":
                 break
+
+    def rest_query(self, soql, all_rows=False, page_size=50000):
+        """Run a REST API query and yield (csv_bytes, record_count) pages like bulk_query's.
+
+        Salesforce returns up to 2,000 records per call; they're gathered into
+        pages of up to page_size. Each page starts with a header row naming the
+        SOQL's fields, and an empty result yields one page with only that row.
+        all_rows uses queryAll, which includes deleted records still in the
+        recycle bin. Uses the org's API request limit, not its Bulk API limits.
+        """
+        fields = select_fields(soql)
+        path = "/queryAll" if all_rows else "/query"
+        params = {"q": soql}
+        rows, yielded = [], False
+        while path:
+            body = self.request("GET", path, params=params).json(parse_float=Decimal)
+            rows += (csv_row(record, fields) for record in body["records"])
+            while len(rows) >= page_size:
+                yield csv_page(fields, rows[:page_size]), page_size
+                rows, yielded = rows[page_size:], True
+            path, params = (None if body.get("done", True) else body["nextRecordsUrl"]), None
+        if rows or not yielded:
+            yield csv_page(fields, rows), len(rows)
+
+
+def select_fields(soql):
+    """The fields a simple SELECT ... FROM query names, e.g. ['Id', 'Account.Name']."""
+    match = re.match(r"^\s*SELECT\s+(.+?)\s+FROM\s", soql, re.IGNORECASE | re.DOTALL)
+    if not match or "(" in match.group(1):
+        raise SalesforceError(f"Can't run this query through the REST API: {soql[:200]}")
+    return [f.strip() for f in match.group(1).split(",")]
+
+
+def csv_value(value):
+    """A REST API JSON value written the way the Bulk API's CSV writes it."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return REST_DATETIME.sub(r"\1Z", value)
+    return str(value)
+
+
+def csv_row(record, fields):
+    """One record's values for the fields, following relationship paths like Account.Name."""
+    row = []
+    for field in fields:
+        value = record
+        for part in field.split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            # Match case-insensitively: SOQL doesn't care how the query spells a field
+            value = next((v for k, v in value.items() if k.lower() == part.lower()), None)
+        row.append(csv_value(value))
+    return row
+
+
+def csv_page(fields, rows):
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(fields)
+    writer.writerows(rows)
+    return out.getvalue().encode("utf-8")

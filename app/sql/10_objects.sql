@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_JOBS (
   CONNECTION_NAME      VARCHAR NOT NULL,
   SOURCE_OBJECT        VARCHAR NOT NULL COMMENT 'The object to sync, e.g. a Salesforce object API name',
   FIELDS               ARRAY COMMENT 'Field names; NULL for every exportable field',
+  SOURCE_API           VARCHAR COMMENT 'The API exports run through; Salesforce: bulk or rest. NULL for the connector''s default (bulk)',
   TARGET_DATABASE      VARCHAR NOT NULL,
   TARGET_SCHEMA        VARCHAR NOT NULL,
   TARGET_TABLE         VARCHAR COMMENT 'NULL for the object name in the connector''s convention (Subscription__c -> SUBSCRIPTION_C); reserved words like ORDER are quoted',
@@ -40,6 +41,10 @@ CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_JOBS (
   CREATED_AT           TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP(),
   UPDATED_AT           TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- Columns added since GLACIER_JOBS was first created
+ALTER TABLE {{APP}}.GLACIER_JOBS ADD COLUMN IF NOT EXISTS
+  SOURCE_API VARCHAR COMMENT 'The API exports run through; Salesforce: bulk or rest. NULL for the connector''s default (bulk)';
 
 -- One row per run.
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_RUNS (

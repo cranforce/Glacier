@@ -1,4 +1,4 @@
-"""The Salesforce connector: JWT bearer login, describe, SOQL, and Bulk API 2.0 exports.
+"""The Salesforce connector: JWT bearer login, describe, SOQL, and Bulk API 2.0 or REST exports.
 
 The settings, names, types, and queries are pure and unit tested locally. The
 functions that take a secret call Salesforce, and run only inside the owner's
@@ -43,6 +43,11 @@ KEYS = core.RecordKeys(key="Id", change="SystemModstamp", deleted="IsDeleted",
                        untracked=("LastViewedDate", "LastReferencedDate"),
                        column=column_name)
 DELETE_MODES = core.DELETE_MODES
+# The APIs a job can export through; the first is the default
+APIS = ("bulk", "rest")
+API_HELP = ("bulk runs a Bulk API 2.0 job and counts against the org's Bulk API limits; rest pages "
+            "through the REST API 2,000 records per call and counts against its API request limit. "
+            "rest suits small deltas; bulk, large loads.")
 
 SETTINGS = (
     core.Setting("MY_DOMAIN_URL", "My Domain URL", placeholder="https://<domain>.my.salesforce.com",
@@ -206,9 +211,12 @@ def describe(settings, secret, sobject):
     return result["name"], field_rows(result)
 
 
-def export(settings, secret, soql, include_deleted):
+def export(settings, secret, soql, include_deleted, api=None):
     """Yield (CSV bytes, record count) per results page, each with its own header row.
 
-    include_deleted adds records in the recycle bin (queryAll).
+    include_deleted adds records in the recycle bin (queryAll). api is bulk
+    (the default) or rest.
     """
-    return client(settings, secret).bulk_query(soql, all_rows=bool(include_deleted))
+    sf = client(settings, secret)
+    query = sf.rest_query if core.source_api(api, APIS) == "rest" else sf.bulk_query
+    return query(soql, all_rows=bool(include_deleted))

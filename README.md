@@ -4,7 +4,7 @@ Syncs enterprise systems into Snowflake. Salesforce is supported today; ShipHero
 planned (see the [roadmap](docs/glacier-roadmap.md)).
 
 Glacier runs inside Snowflake, in `GLACIER_DB.APP`. Each sync job is a Snowflake task that calls
-Python procedures: they export the records changed since the last run (Salesforce's Bulk API 2.0),
+Python procedures: they export the records changed since the last run (Salesforce's Bulk API 2.0 or REST API, per job),
 merge them into the job's table, handle deleted records, and can keep a type 2 history of every
 change. A Streamlit app, `GLACIER_APP`, manages the connections and jobs and shows the runs.
 

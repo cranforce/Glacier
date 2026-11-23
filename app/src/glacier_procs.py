@@ -101,12 +101,13 @@ def describe(session, connection_name, source_object, connector, app):
             "exportable": sum(1 for f in fields if f["exportable"])}
 
 
-def extract(session, connection_name, query, include_deleted, run_id, connector, app):
-    """Run an export and write each page to the exports stage."""
+def extract(session, connection_name, query, include_deleted, run_id, api, connector, app):
+    """Run an export through api (NULL for the connector's default) and write each page to the
+    exports stage."""
     source, settings, secret = _source(session, app, connection_name, connector)
     stage = f"@{app}.GLACIER_EXPORTS/{core.identifier('R' + run_id.replace('-', ''), 'run id')}"
     columns, rows, files = None, 0, 0
-    for page, count in source.export(settings, secret, query, bool(include_deleted)):
+    for page, count in source.export(settings, secret, query, bool(include_deleted), api):
         if count == 0:
             continue
         first, _, rest = page.partition(b"\n")
@@ -290,6 +291,7 @@ def _run(session, app, job, mode, run_id):
     if delete_mode not in source.DELETE_MODES:
         raise core.ConfigError(f"Unknown delete mode {delete_mode!r} for {source.LABEL}; "
                                f"use one of {', '.join(source.DELETE_MODES)}")
+    api = core.source_api(job.get("SOURCE_API"), source.APIS)
     file_format = f"{app}.{FILE_FORMAT}"
 
     fields = _fields(session, app, connector, conn, source_object)
@@ -311,7 +313,7 @@ def _run(session, app, job, mode, run_id):
 
     def export(query, include_deleted):
         return _variant(session.call(f"{app}.{core.procedure_name(connector, 'EXTRACT')}",
-                                     conn, query, include_deleted, run_id))
+                                     conn, query, include_deleted, run_id, api))
 
     def reconcile():
         return _reconcile(session, source, source_object, fq_table, staging["__IDS"], file_format,
@@ -340,7 +342,8 @@ def _run(session, app, job, mode, run_id):
     query = source.build_query(source_object, selected, since, extras)
     exported = export(query, include_deleted)
     columns = exported["columns"] or source.query_columns(query)
-    result = {"query": query, "watermark": since, "exported": exported["rows"], "target": fq_table}
+    result = {"query": query, "api": api, "watermark": since, "exported": exported["rows"],
+              "target": fq_table}
 
     if since is not None:
         result["mode"] = "sync"

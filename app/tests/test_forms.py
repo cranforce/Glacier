@@ -36,6 +36,10 @@ class JobTest(unittest.TestCase):
         self.assertIsNone(saved["FIELDS"])
         self.assertEqual(forms.target_table(saved, sf), "CRM_DB.S.SUBSCRIPTION_C")
 
+    def test_source_api(self):
+        self.assertEqual(forms.validate_job(job(), APP, ROLE, "salesforce")["SOURCE_API"], "bulk")
+        self.assertEqual(forms.validate_job(job(SOURCE_API="REST"), APP, ROLE, "salesforce")["SOURCE_API"], "rest")
+
     def test_manual_schedule_is_null(self):
         self.assertIsNone(forms.validate_job(job(SCHEDULE=""), APP, ROLE, "salesforce")["SCHEDULE"])
 
@@ -45,7 +49,7 @@ class JobTest(unittest.TestCase):
 
     def test_rejects_bad_values(self):
         for bad in (dict(JOB_NAME="has space"), dict(SOURCE_OBJECT="Bad;Object"), dict(FIELDS=[]),
-                    dict(FIELDS=["Name", "x y"]), dict(DELETE_MODE="purge"),
+                    dict(FIELDS=["Name", "x y"]), dict(DELETE_MODE="purge"), dict(SOURCE_API="soap"),
                     dict(RECONCILE_AFTER_DAYS=0), dict(WAREHOUSE=""), dict(TARGET_TABLE='T"; DROP'),
                     dict(SCHEDULE="0 * * * * UTC; DROP"), dict(RUN_AS_USER='x"; DROP')):
             with self.subTest(bad=bad), self.assertRaises(core.ConfigError):

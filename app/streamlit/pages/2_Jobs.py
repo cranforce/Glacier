@@ -27,6 +27,7 @@ if not connections:
 if jobs:
     st.dataframe(
         [{"JOB_NAME": j["JOB_NAME"], "CONNECTION": j["CONNECTION_NAME"], "OBJECT": j["SOURCE_OBJECT"],
+          "API": j.get("SOURCE_API") or sources[j["CONNECTION_NAME"]].APIS[0],
           "TARGET": forms.target_table(j, sources[j["CONNECTION_NAME"]]), "DELETES": j["DELETE_MODE"],
           "HISTORY": j["TRACK_HISTORY"], "SCHEDULE": j["SCHEDULE"], "ENABLED": j["ENABLED"],
           "TASK": states.get(j["JOB_NAME"], "not saved")} for j in jobs],
@@ -110,6 +111,12 @@ with left:
                 st.caption(f"{len(exportable)} of {len(captured)} fields are exportable; "
                            f"{source.UNEXPORTABLE_NOTE}")
 
+    apis = list(source.APIS)
+    current_api = default("SOURCE_API", apis[0])
+    source_api = st.selectbox("API", apis, key=key + "api", disabled=len(apis) == 1,
+                              index=apis.index(current_api) if current_api in apis else 0,
+                              help=source.API_HELP)
+
 with right:
     st.markdown("**Destination**")
     target_db = st.text_input("Database", value=default("TARGET_DATABASE", app.split(".")[0]),
@@ -161,7 +168,7 @@ if st.button("Save job", type="primary"):
         saved = forms.validate_job({
             "JOB_NAME": job_name if is_new else choice, "CONNECTION_NAME": conn,
             "SOURCE_OBJECT": source_object,
-            "FIELDS": fields, "TARGET_DATABASE": target_db, "TARGET_SCHEMA": target_schema,
+            "FIELDS": fields, "SOURCE_API": source_api, "TARGET_DATABASE": target_db, "TARGET_SCHEMA": target_schema,
             "TARGET_TABLE": target_table, "DELETE_MODE": delete_mode,
             "RECONCILE_AFTER_DAYS": reconcile_days, "TRACK_HISTORY": track_history,
             "RUN_AS_USER": run_as_user, "RUN_AS_ROLE": run_as_role, "WAREHOUSE": warehouse,

@@ -19,7 +19,7 @@ flowchart LR
   TASK["Task per job"] -- "CALL" --> RUN["GLACIER_RUN_JOB<br/>caller's rights"]
   RUN -- "CALL" --> EXT["GLACIER_SALESFORCE_EXTRACT<br/>owner's rights"]
   SEC["Secret per connection"] -.-> EXT
-  EXT -- "Bulk API 2.0<br/>via the integration" --> SF["Salesforce"]
+  EXT -- "Bulk API 2.0 or REST<br/>via the integration" --> SF["Salesforce"]
   EXT -- "CSV parts" --> STG[("GLACIER_EXPORTS stage")]
   STG -- "COPY + MERGE" --> RUN
   RUN -- "as the job's role" --> DEST[("Target table")]
@@ -215,7 +215,7 @@ secrets are fixed when it's created. `deploy.sh` calls it too.
 | `GLACIER_SALESFORCE_TEST_CONNECTION(conn)` | owner | Log in and count queryable objects |
 | `GLACIER_SALESFORCE_LIST_OBJECTS(conn)` | owner | List queryable objects |
 | `GLACIER_SALESFORCE_DESCRIBE(conn, object)` | owner | Capture an object's fields into `GLACIER_FIELDS` |
-| `GLACIER_SALESFORCE_EXTRACT(conn, query, include_deleted, run_id)` | owner | Bulk API export to the `GLACIER_EXPORTS` stage |
+| `GLACIER_SALESFORCE_EXTRACT(conn, query, include_deleted, run_id, api)` | owner | Bulk API or REST export to the `GLACIER_EXPORTS` stage |
 
 The last four are Salesforce's own; each connector gets its set, `GLACIER_<CONNECTOR>_<ACTION>`, holding only its connections' secrets. They exist only once the connector's integration does.
 

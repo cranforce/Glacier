@@ -16,7 +16,7 @@ class RegistryTest(unittest.TestCase):
             connectors.get("nope")
 
     def test_every_connector_has_the_interface(self):
-        names = ("NAME", "LABEL", "KEYS", "DELETE_MODES", "SETTINGS", "SECRET_LABEL", "SECRET_PLACEHOLDER",
+        names = ("NAME", "LABEL", "KEYS", "DELETE_MODES", "APIS", "SETTINGS", "SECRET_LABEL", "SECRET_PLACEHOLDER",
                  "OBJECT_PLACEHOLDER", "FIELDS_HELP", "UNEXPORTABLE_NOTE", "validate_settings",
                  "validate_secret", "object_name", "field_name", "build_query", "build_ids_query",
                  "query_columns", "test", "list_objects", "describe", "export")
@@ -24,6 +24,34 @@ class RegistryTest(unittest.TestCase):
             self.assertEqual(connector.NAME, name)
             for attr in names:
                 self.assertTrue(hasattr(connector, attr), f"{name} has no {attr}")
+
+
+class ExportTest(unittest.TestCase):
+    def export(self, api):
+        calls = []
+
+        class Client:
+            def bulk_query(self, soql, all_rows):
+                calls.append(("bulk", soql, all_rows))
+                return iter(())
+
+            def rest_query(self, soql, all_rows):
+                calls.append(("rest", soql, all_rows))
+                return iter(())
+
+        original, sf.client = sf.client, lambda settings, secret: Client()
+        try:
+            sf.export({}, "pem", "SELECT Id FROM X", 1, api)
+        finally:
+            sf.client = original
+        return calls[0]
+
+    def test_api_picks_the_query(self):
+        self.assertEqual(self.export(None), ("bulk", "SELECT Id FROM X", True))
+        self.assertEqual(self.export("bulk")[0], "bulk")
+        self.assertEqual(self.export(" REST ")[0], "rest")
+        with self.assertRaises(core.ConfigError):
+            self.export("soap")
 
 
 class SettingsTest(unittest.TestCase):
