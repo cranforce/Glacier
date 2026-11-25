@@ -8,7 +8,7 @@ from glacier_ui import core
 
 st.set_page_config(page_title="Jobs · Glacier", layout="wide")
 st.title("Jobs")
-st.caption("A job syncs one object, such as a Salesforce object, into one Snowflake table. "
+st.caption("A job syncs one object, such as a Salesforce object or Shopify orders, into one Snowflake table. "
            "See docs/jobs.md.")
 ui.show_flash()
 
@@ -123,10 +123,12 @@ with right:
                               key=key + "db")
     target_schema = st.text_input("Schema", value=default("TARGET_SCHEMA", app.split(".")[1]),
                                   key=key + "schema")
+    try:
+        table_placeholder = source.table_name(source_object) if source_object else ""
+    except core.ConfigError:
+        table_placeholder = ""
     target_table = st.text_input(
-        "Table", value=default("TARGET_TABLE", ""), key=key + "table",
-        placeholder=source.table_name(source_object)
-        if source_object and core.IDENTIFIER.match(source_object) else "",
+        "Table", value=default("TARGET_TABLE", ""), key=key + "table", placeholder=table_placeholder,
         help=f"Blank for {source.TABLE_NAME_HELP}. Set it to keep loading an existing table.")
     delete_modes = list(source.DELETE_MODES)
     current_mode = default("DELETE_MODE", "flag" if "flag" in delete_modes else delete_modes[0])

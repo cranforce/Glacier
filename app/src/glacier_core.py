@@ -30,12 +30,16 @@ WATERMARK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
 WATERMARK = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+# Splits camelCase and PascalCase at each case change, for connectors' column
+# names: GiftTransaction -> Gift_Transaction, ExternalID -> External_ID,
+# HTMLBody -> HTML_Body, totalPriceSet -> total_Price_Set
+CASE_CHANGE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 USER_NAME = re.compile(r"^[A-Za-z0-9_.@+-]+$")
 CRON = re.compile(r"^[0-9A-Za-z*/,_ -]+$")
 
 # Python files every procedure imports from the code stage
 CODE_FILES = ("glacier_core.py", "glacier_connectors.py", "glacier_procs.py",
-              "connector_salesforce.py", "sforce_api.py")
+              "connector_salesforce.py", "sforce_api.py", "connector_shopify.py", "shopify_api.py")
 PACKAGES = "('snowflake-snowpark-python', 'requests', 'cryptography')"
 
 
@@ -234,11 +238,12 @@ def transaction(statements):
     return ["BEGIN", *statements, "COMMIT"]
 
 
-def history_table_sql(history_table, valid_type, keys):
+def history_table_sql(history_table, valid_type, keys, key_type="VARCHAR"):
     """Create the history table if it's missing. Its other columns are added
-    like the target's, so a reconcile can create it without knowing them."""
+    like the target's, so a reconcile can create it without knowing them. The
+    key has the target's type, so a row hashes the same in both."""
     return (f"CREATE TABLE IF NOT EXISTS {history_table} (\n"
-            f"  {keys.key_col} VARCHAR,\n  VALID_FROM {valid_type},\n  VALID_TO {valid_type},\n"
+            f"  {keys.key_col} {key_type},\n  VALID_FROM {valid_type},\n  VALID_TO {valid_type},\n"
             "  IS_CURRENT BOOLEAN\n)")
 
 
@@ -246,7 +251,8 @@ def history_setup_statements(history_table, columns, types, keys):
     clash = [c for c in columns if c in HISTORY_COLUMNS]
     if clash:
         raise ConfigError(f"Can't track history: {', '.join(clash)} would clash with the history columns")
-    return [history_table_sql(history_table, types.get(keys.change_col, "VARCHAR"), keys),
+    return [history_table_sql(history_table, types.get(keys.change_col, "VARCHAR"), keys,
+                              types.get(keys.key_col, "VARCHAR")),
             add_columns_sql(history_table, columns, types)]
 
 
@@ -333,7 +339,7 @@ def delta_statements(fq_table, delta_table, columns, types, stage_path, file_for
 
 
 def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mode, keys,
-                         history_table=None, valid_type="TIMESTAMP_NTZ"):
+                         history_table=None, valid_type="TIMESTAMP_NTZ", key_type="VARCHAR"):
     """Flag or remove every row whose key no longer exists in the source, and with
     history_table, end those records' current versions. The flag or remove is the
     last statement, or the one before COMMIT."""
@@ -351,7 +357,7 @@ def reconcile_statements(fq_table, ids_table, stage_path, file_format, delete_mo
                  f"    AND NOT COALESCE({deleted}::BOOLEAN, FALSE)")
     if not history_table:
         return statements + [apply]
-    return statements + [history_table_sql(history_table, valid_type, keys)] + transaction(
+    return statements + [history_table_sql(history_table, valid_type, keys, key_type)] + transaction(
         [close_history_sql(history_table, f"SELECT {key} FROM {ids_table}", keys), apply])
 
 

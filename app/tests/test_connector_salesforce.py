@@ -16,7 +16,7 @@ class RegistryTest(unittest.TestCase):
             connectors.get("nope")
 
     def test_every_connector_has_the_interface(self):
-        names = ("NAME", "LABEL", "KEYS", "DELETE_MODES", "APIS", "SETTINGS", "SECRET_LABEL", "SECRET_PLACEHOLDER",
+        names = ("NAME", "LABEL", "KEYS", "keys", "DELETE_MODES", "APIS", "SETTINGS", "SECRET_LABEL", "SECRET_PLACEHOLDER",
                  "OBJECT_PLACEHOLDER", "FIELDS_HELP", "UNEXPORTABLE_NOTE", "validate_settings",
                  "validate_secret", "object_name", "field_name", "build_query", "build_ids_query",
                  "query_columns", "test", "list_objects", "describe", "export")

@@ -11,7 +11,7 @@ USE WAREHOUSE {{APP_WAREHOUSE}};
 -- External Client App.
 CREATE TABLE IF NOT EXISTS {{APP}}.GLACIER_CONNECTIONS (
   CONNECTION_NAME VARCHAR NOT NULL PRIMARY KEY,
-  CONNECTOR       VARCHAR NOT NULL COMMENT 'salesforce',
+  CONNECTOR       VARCHAR NOT NULL COMMENT 'salesforce or shopify',
   SETTINGS        OBJECT NOT NULL COMMENT 'The connector''s settings',
   SECRET_NAME     VARCHAR NOT NULL COMMENT 'Fully qualified GENERIC_STRING secret with the credential',
   DESCRIPTION     VARCHAR,
@@ -103,3 +103,10 @@ CREATE NETWORK RULE IF NOT EXISTS {{APP}}.GLACIER_SALESFORCE_EGRESS
   TYPE = HOST_PORT
   VALUE_LIST = ('login.salesforce.com', 'test.salesforce.com',
                 '*.my.salesforce.com', '*.sandbox.my.salesforce.com');
+
+-- Shopify: every store's Admin API, and the storage host bulk query results
+-- download from.
+CREATE NETWORK RULE IF NOT EXISTS {{APP}}.GLACIER_SHOPIFY_EGRESS
+  MODE = EGRESS
+  TYPE = HOST_PORT
+  VALUE_LIST = ('*.myshopify.com', 'storage.googleapis.com');

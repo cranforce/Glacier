@@ -142,6 +142,18 @@ class LoadSqlTest(unittest.TestCase):
         self.assertTrue(stmts[-2].startswith("DELETE FROM D.S.T WHERE"))
         self.assertIn("UPDATE D.S.T__HISTORY SET VALID_TO = CONVERT_TIMEZONE", stmts[-3])
         self.assertTrue(stmts[-5].startswith("CREATE TABLE IF NOT EXISTS D.S.T__HISTORY"))
+        self.assertIn("ID VARCHAR", stmts[-5])
+
+    def test_history_key_has_the_targets_type(self):
+        """A numeric key stays numeric in history, so its rows hash the same as the target's."""
+        keys = core.RecordKeys(key="id", change="updated_at")
+        types = {"ID": "NUMBER(38,0)", "UPDATED_AT": "TIMESTAMP_NTZ"}
+        stmts = core.delta_statements("D.S.T", "D.S.T__DELTA", ["ID", "UPDATED_AT"], types, "@x/", "F", "off",
+                                      keys, "D.S.T__HISTORY")
+        self.assertIn("ID NUMBER(38,0),", stmts[1])
+        stmts = core.reconcile_statements("D.S.T", "D.S.T__IDS", "@x/", "F", "flag", keys, "D.S.T__HISTORY",
+                                          key_type="NUMBER(38,0)")
+        self.assertIn("ID NUMBER(38,0),", stmts[-5])
 
     def test_other_sources_keys(self):
         """A source with its own key and change fields, and no deleted flag."""

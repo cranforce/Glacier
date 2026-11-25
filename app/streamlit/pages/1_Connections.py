@@ -7,7 +7,7 @@ from glacier_ui import connectors, core
 
 st.set_page_config(page_title="Connections · Glacier", layout="wide")
 st.title("Connections")
-st.caption("One per source system account, such as a Salesforce org. "
+st.caption("One per source system account, such as a Salesforce org or a Shopify store. "
            "See docs/snowflake-setup.md for each connector's credentials.")
 
 ui.show_flash()

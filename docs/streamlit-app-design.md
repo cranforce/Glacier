@@ -1,6 +1,6 @@
 ---
 title: Streamlit app design
-nav_order: 6
+nav_order: 7
 ---
 
 # Glacier as a Streamlit in Snowflake app

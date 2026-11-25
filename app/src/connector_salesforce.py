@@ -13,9 +13,6 @@ from sforce_api import Salesforce
 NAME = "salesforce"
 LABEL = "Salesforce"
 
-# Splits PascalCase at each case change: GiftTransaction -> Gift_Transaction,
-# ExternalID -> External_ID, HTMLBody -> HTML_Body
-CASE_CHANGE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 CUSTOM_SUFFIX = re.compile(r"__c$", re.IGNORECASE)
 
 
@@ -25,7 +22,7 @@ def snowflake_name(name):
     Financial_Batch__c -> FINANCIAL_BATCH_C). A relationship field's dots become
     underscores (Account.Name -> ACCOUNT_NAME)."""
     name = name.strip().strip('"')
-    parts = (CASE_CHANGE.sub("_", CUSTOM_SUFFIX.sub("_c", part)) for part in name.split("."))
+    parts = (core.CASE_CHANGE.sub("_", CUSTOM_SUFFIX.sub("_c", part)) for part in name.split("."))
     return "_".join(parts).upper()
 
 
@@ -43,6 +40,12 @@ KEYS = core.RecordKeys(key="Id", change="SystemModstamp", deleted="IsDeleted",
                        untracked=("LastViewedDate", "LastReferencedDate"),
                        column=column_name)
 DELETE_MODES = core.DELETE_MODES
+
+
+def keys(sobject):
+    """Every object has the same key, change, and deleted fields."""
+    return KEYS
+
 # The APIs a job can export through; the first is the default
 APIS = ("bulk", "rest")
 API_HELP = ("bulk runs a Bulk API 2.0 job and counts against the org's Bulk API limits; rest pages "
