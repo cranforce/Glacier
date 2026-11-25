@@ -29,6 +29,8 @@ exports only the records that changed since the last one (by `SystemModstamp`), 
 - **[Jobs in Snowflake](jobs.md)**: create a job, run it, schedule it, and check its runs.
 - **[How syncing works](how-syncing-works.md)**: deltas, full loads, deletes, reconcile, and
   history.
+- **[Salesforce](salesforce.md)**: the Salesforce connector, its APIs, fields and names, and setting up
+  an org.
 - **[Shopify](shopify.md)**: the Shopify connector, its objects and names, and setting up a store.
 - **[Roadmap](glacier-roadmap.md)**: the move to `GLACIER_DB.APP` and connectors beyond Salesforce.
 
