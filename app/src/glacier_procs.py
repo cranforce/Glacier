@@ -278,8 +278,8 @@ def _run(session, app, job, mode, run_id):
     conn = core.identifier(job["CONNECTION_NAME"], "connection name")
     connector = _connection(session, app, conn)["CONNECTOR"].lower()
     source = connectors.get(connector)
-    keys = source.KEYS
     source_object = source.object_name(job["SOURCE_OBJECT"])
+    keys = source.keys(source_object)
     db = core.identifier(job["TARGET_DATABASE"], "target database")
     schema = core.identifier(job["TARGET_SCHEMA"], "target schema")
     table = core.table_identifier(job.get("TARGET_TABLE") or source.table_name(source_object))
@@ -316,7 +316,7 @@ def _run(session, app, job, mode, run_id):
                                      conn, query, include_deleted, run_id, api))
 
     def reconcile():
-        return _reconcile(session, source, source_object, fq_table, staging["__IDS"], file_format,
+        return _reconcile(session, source, source_object, keys, fq_table, staging["__IDS"], file_format,
                           delete_mode, export, history, types)
 
     if mode == "reconcile":
@@ -386,18 +386,17 @@ def _versions_message(insert_result):
     return f"Recorded {insert_result[0].get('number of rows inserted') or 0} history versions."
 
 
-def _reconcile(session, source, source_object, fq_table, ids_table, file_format, delete_mode, export,
+def _reconcile(session, source, source_object, keys, fq_table, ids_table, file_format, delete_mode, export,
                history=None, types=None):
     if delete_mode == "off":
         raise core.ConfigError("Deletes are off for this job; nothing to reconcile.")
-    keys = source.KEYS
     exported = export(source.build_ids_query(source_object), False)
     if exported["rows"] == 0:
         raise core.ConfigError(f"{source.LABEL} returned no records; refusing to reconcile "
                                "(it would flag or remove every row).")
     out = _execute(session, core.reconcile_statements(
         fq_table, ids_table, exported["stage_path"], file_format, delete_mode, keys,
-        history, (types or {}).get(keys.change_col, "VARCHAR")))
+        history, (types or {}).get(keys.change_col, "VARCHAR"), (types or {}).get(keys.key_col, "VARCHAR")))
     # With history, the flag or remove is followed by COMMIT
     changed = out[-2 if history else -1][0].get("number of rows deleted" if delete_mode == "remove" else "number of rows updated")
     verb = "Removed" if delete_mode == "remove" else "Flagged"

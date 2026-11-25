@@ -1,16 +1,18 @@
 ---
 title: Glacier roadmap
-nav_order: 7
+nav_order: 8
 ---
 
 # Glacier roadmap
 
 Glacier started as Snowforce, a Salesforce-to-Snowflake sync. It is becoming a general way to
-sync enterprise systems into Snowflake. Salesforce is the first source and ShipHero the next,
-each a *connector* behind the same jobs, runs, scheduling, delete handling, and history.
+sync enterprise systems into Snowflake. Salesforce is the first source, Shopify the second, and
+ShipHero the next, each a *connector* behind the same jobs, runs, scheduling, delete handling,
+and history.
 
 Status: phases 1 to 3 are done. Glacier runs in `GLACIER_DB.APP`, and the Snowforce tasks are
-suspended. Phase 3's last step, dropping the old Snowforce objects, is still to do.
+suspended. Phase 3's last step, dropping the old Snowforce objects, is still to do. Phase 4, the
+Shopify connector, is built and needs a test store.
 
 1. TOC
 {:toc}
@@ -22,7 +24,8 @@ suspended. Phase 3's last step, dropping the old Snowforce objects, is still to 
 | 1 | Rename to Glacier; give it its own database, schema, role, and warehouse | Repo | Done |
 | 2 | Connector abstraction, with Salesforce as the first connector and no change in behaviour | Repo | Done |
 | 3 | Stand up `GLACIER_DB.APP` in Snowflake, move the connections and jobs, and cut over | Snowflake | Done, except dropping the old objects |
-| 4 | ShipHero connector | Repo, then Snowflake | Next |
+| 4 | Shopify connector, for the US, Europe, India, and Artos stores | Repo, then Snowflake | Built; to test against a store |
+| 5 | ShipHero connector | Repo, then Snowflake | Next |
 
 Phase 2 comes before phase 3 on purpose: the new tables are then created in their final shape,
 and the connections and jobs are copied only once.
@@ -130,7 +133,40 @@ Still to do: once the Glacier jobs have run cleanly for a while, drop the old `S
 objects and synced tables in `CRM_DB.CMILLER_SF_PLAYGROUND`, and `SNOWFORCE_WH` if nothing else
 uses it.
 
-## Phase 4: ShipHero
+## Phase 4: Shopify
+
+Glacier replaces the Precog loads of the four active stores in `RAW_DB` with jobs loading
+`GLACIER_DB.SHOPIFY_<STORE>_PROD_RAW`. [Shopify](shopify.md) describes the connector. In short:
+
+- **API:** GraphQL Admin API bulk queries. REST is legacy, and bulk queries don't count against
+  the rate limit.
+- **Objects:** a fixed list of root objects (orders, customers, products, and others) and child
+  objects (`orders.lineItems`), each its own job and table.
+- **Names:** Glacier's convention throughout (`ORDERS_LINE_ITEMS.ORIGINAL_UNIT_PRICE_SET_SHOP_MONEY_AMOUNT`),
+  not Precog's reversed child-table names.
+- **Deletes:** by reconcile only.
+- **History:** on for products, variants, and customers; off for orders to start.
+
+The core changed in three ways:
+
+- A connector's keys can differ by object (`keys(object)`). A Shopify child's change field is its
+  root's (`ORDER_UPDATED_AT`), and events change on `CREATED_AT`.
+- A history table's key now has the target's type. Before, a numeric key became `VARCHAR` in
+  history, so no row hashed the same as its target row, and every sync would have recorded a new
+  version of every record.
+- Camel case splitting (`core.CASE_CHANGE`) is shared by the connectors.
+
+Next:
+
+1. An admin runs `app/deploy.sh admin-sql setup` (for the store schemas) and
+   `app/deploy.sh admin-sql integration shopify`.
+2. Run the US UAT store first, to settle what [To confirm against a real store](shopify.md#to-confirm-against-a-real-store) lists.
+3. Add the four connections and their jobs, and compare row counts and totals with Precog's tables.
+4. Map the downstream models from the Precog columns to the new ones.
+5. Add what isn't supported yet: refund and fulfillment line items, collection membership,
+   inventory levels, and reference data.
+
+## Phase 5: ShipHero
 
 Answer these first:
 

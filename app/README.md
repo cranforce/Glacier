@@ -20,13 +20,15 @@ with SQL ([sql/examples.sql](sql/examples.sql)).
 | `src/glacier_connectors.py` | The connectors by name, and what each one provides |
 | `src/connector_salesforce.py` | The Salesforce connector: settings, types, SOQL, and calls through `sforce_api.py` |
 | `src/sforce_api.py` | Salesforce client: JWT bearer login, describe, Bulk API 2.0 and REST queries |
+| `src/connector_shopify.py` | The Shopify connector: its objects, introspected fields, bulk queries, and JSONL flattening |
+| `src/shopify_api.py` | Shopify client: access token or client credentials, GraphQL, introspection, bulk queries |
 | `src/glacier_procs.py` | Procedure handlers; they reach sources through the connectors |
 | `streamlit/` | The Streamlit app: a home page, and Connections, Jobs, and Runs pages |
 | `streamlit/glacier_forms.py` | Pure logic behind the forms: validation and the save SQL |
 | `streamlit/glacier_ui.py` | Session, app schema, and reads and calls shared by the pages |
 | `streamlit/environment.yml` | The app's packages, from Snowflake's Anaconda channel |
 | `streamlit/run_local.sh` | Run the app on your machine against the deployed engine |
-| `tests/` | Unit tests for the pure logic, the connectors, the Salesforce client, and the forms |
+| `tests/` | Unit tests for the pure logic, the connectors, the Salesforce and Shopify clients, and the forms |
 
 ## Connectors
 
@@ -67,6 +69,11 @@ python3 -m unittest discover -s app/tests
    objects. You need the app's consumer key and the user's username.
 4. Add the connection ([sql/examples.sql](sql/examples.sql) step 1) and
    `CALL GLACIER_REFRESH_CONNECTIONS()`.
+
+## Before it can reach Shopify
+
+See [docs/shopify.md](../docs/shopify.md#setting-up-a-store): an app per store, then
+`app/deploy.sh admin-sql integration shopify`, then a connection per store.
 
 ## Procedures
 
